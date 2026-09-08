@@ -158,6 +158,7 @@ export default function Home() {
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
+  const [todayOpen, setTodayOpen] = useState(false);
   const [selectedPlanGroupId, setSelectedPlanGroupId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [activeServiceSession, setActiveServiceSession] = useState(0);
@@ -226,6 +227,13 @@ export default function Home() {
     ? appointments.filter((item) => item.groupId === selectedPlanGroupId).sort((a, b) => a.sessionNumber - b.sessionNumber)
     : [];
   const selectedPlanHead = selectedPlan[0];
+  const selectedPlanLast = selectedPlan[selectedPlan.length - 1];
+  const selectedPlanStats = selectedPlanHead
+    ? groupStats.get(selectedPlanHead.groupId) ?? { completed: 0, absent: 0, scheduled: 0 }
+    : { completed: 0, absent: 0, scheduled: 0 };
+  const selectedPlanIsRenewable = Boolean(
+    selectedPlanLast?.status === 'completed' && selectedPlanStats.scheduled === 0,
+  );
   const completedToDelete = editingPlan.filter((item) => item.status === 'completed').length;
   const deleteBlockers = [
     completedToDelete
@@ -318,6 +326,25 @@ export default function Home() {
   function openPlan(item: Appointment) {
     setSelectedPlanGroupId(item.groupId);
     setPlanOpen(true);
+  }
+
+  function editFromOverview(item: Appointment) {
+    setTodayOpen(false);
+    setPlanOpen(false);
+    setSelectedPlanGroupId(null);
+    openEdit(item);
+  }
+
+  function deleteFromPlan() {
+    if (!selectedPlanHead) return;
+    setPlanOpen(false);
+    setSelectedPlanGroupId(null);
+    openDelete(selectedPlanHead);
+  }
+
+  function openPlanFromToday(item: Appointment) {
+    setTodayOpen(false);
+    openPlan(item);
   }
 
   async function saveEdit(event: FormEvent) {
@@ -538,6 +565,27 @@ export default function Home() {
             </div>
           </div>
 
+          <Button
+            type="button"
+            onClick={() => setTodayOpen(true)}
+            className="mb-6 h-auto w-full justify-between gap-4 rounded-2xl border border-[#cdbce0] bg-[#7353a6] p-4 text-left text-white shadow-[0_10px_28px_rgba(115,83,166,0.22)] hover:bg-[#684999] sm:p-5"
+          >
+            <span className="flex min-w-0 items-center gap-3 sm:gap-4">
+              <span className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-white/15 font-heading text-2xl font-extrabold sm:h-16 sm:w-16 sm:text-3xl">{Number(today.slice(-2))}</span>
+              <span className="min-w-0">
+                <span className="block text-xs font-extrabold uppercase tracking-[0.14em] text-[#e8dcf3]">Agenda de hoje</span>
+                <span className="mt-1 block truncate font-heading text-lg font-extrabold capitalize sm:text-xl">{prettyDate(today)}</span>
+                <span className="mt-1 block text-xs font-semibold text-[#eadff4]">Toque para ver e atualizar os atendimentos</span>
+              </span>
+            </span>
+            <span className="flex shrink-0 items-center gap-2 sm:gap-4">
+              <span className="text-center"><strong className="block font-heading text-2xl font-extrabold">{todayAppointments.length}</strong><small className="text-[10px] font-bold text-[#e8dcf3]">total</small></span>
+              <span className="hidden text-center sm:block"><strong className="block font-heading text-2xl font-extrabold">{todayAppointments.filter((item) => item.status === 'scheduled').length}</strong><small className="text-[10px] font-bold text-[#e8dcf3]">em aberto</small></span>
+              <span className="hidden text-center sm:block"><strong className="block font-heading text-2xl font-extrabold">{todayAppointments.filter((item) => item.status === 'completed').length}</strong><small className="text-[10px] font-bold text-[#e8dcf3]">concluídos</small></span>
+              <ChevronRight className="ml-1" size={22} />
+            </span>
+          </Button>
+
           {loading ? (
             <div className="rounded-2xl border border-[#e4dced] bg-[#fffbff] p-12 text-center text-sm font-semibold text-[#81748a]"><LoaderCircle className="mx-auto mb-2 animate-spin text-[#7353a6]" /> Carregando agenda...</div>
           ) : (
@@ -704,6 +752,63 @@ export default function Home() {
         </aside>
       </div>
 
+      <Dialog open={todayOpen} onOpenChange={setTodayOpen}>
+        <DialogContent className="max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-5 sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><CalendarDays className="text-[#7353a6]" /> Atendimentos de hoje</DialogTitle>
+            <DialogDescription className="capitalize">{prettyDate(today)} · {todayAppointments.length} {todayAppointments.length === 1 ? 'atendimento' : 'atendimentos'}</DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-3 gap-2">
+            <div className="rounded-xl bg-[#f1edf5] p-3 text-center"><strong className="font-heading text-2xl font-extrabold text-[#7353a6]">{todayAppointments.filter((item) => item.status === 'scheduled').length}</strong><span className="block text-[10px] font-bold text-[#81748a]">em aberto</span></div>
+            <div className="rounded-xl bg-[#e8f4eb] p-3 text-center"><strong className="font-heading text-2xl font-extrabold text-[#4f765c]">{todayAppointments.filter((item) => item.status === 'completed').length}</strong><span className="block text-[10px] font-bold text-[#678471]">concluídos</span></div>
+            <div className="rounded-xl bg-[#f7e7e2] p-3 text-center"><strong className="font-heading text-2xl font-extrabold text-[#ad533d]">{todayAppointments.filter((item) => item.status === 'absent').length}</strong><span className="block text-[10px] font-bold text-[#956c61]">faltas</span></div>
+          </div>
+          {todayAppointments.length ? (
+            <div className="space-y-2.5">
+              {todayAppointments.map((item) => (
+                <article key={`today-${item.id}`} className="rounded-2xl border border-[#e4dced] bg-white p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-start gap-3">
+                      <span className="grid h-10 min-w-14 shrink-0 place-items-center rounded-xl bg-[#eee6f7] px-2 font-heading text-sm font-extrabold text-[#7353a6]">{item.scheduledTime}</span>
+                      <div>
+                        <p className="font-heading text-base font-extrabold">{item.dogName || 'Cachorro sem nome'}</p>
+                        {item.ownerName && <p className="text-[11px] font-semibold text-[#92849c]">Dono: {item.ownerName}</p>}
+                        <p className="mt-1 text-xs text-[#81748a]">{planLabels[item.planType]} · sessão {item.sessionNumber} de {item.totalSessions}</p>
+                      </div>
+                    </div>
+                    <span className={`rounded-full px-2.5 py-1 text-[11px] font-extrabold ${item.status === 'completed' ? 'bg-[#e8f4eb] text-[#4f765c]' : item.status === 'absent' ? 'bg-[#f7e7e2] text-[#ad533d]' : 'bg-[#f1edf5] text-[#776a80]'}`}>{statusLabels[item.status]}</span>
+                  </div>
+                  <p className="mt-3 flex flex-wrap items-center gap-x-1.5 text-xs text-[#7d7087]"><Scissors size={13} /> {item.services.length ? item.services.join(' · ') : 'Sem serviços definidos'}</p>
+                  <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-[#eee8f3] pt-3">
+                    {item.whatsapp && <a href={whatsappUrl(item.whatsapp)} target="_blank" rel="noreferrer" className="grid h-8 w-8 place-items-center rounded-lg bg-[#e6f7eb] text-[#1e8b4c]" aria-label="Abrir WhatsApp"><MessageCircle size={16} /></a>}
+                    <Button disabled={saving} variant="outline" size="sm" onClick={() => editFromOverview(item)}><Pencil /> Editar</Button>
+                    {item.planType !== 'single' && <Button disabled={saving} variant="outline" size="sm" onClick={() => openPlanFromToday(item)} className="text-[#7353a6]"><ListChecks /> Ver plano</Button>}
+                    {item.status === 'scheduled' ? (
+                      <>
+                        <Button disabled={saving} variant="outline" size="sm" onClick={() => mutate({ action: 'status', id: item.id, status: 'absent' }, 'Falta registrada')} className="text-[#93503f]"><X /> Falta</Button>
+                        <Button disabled={saving} size="sm" onClick={() => mutate({ action: 'status', id: item.id, status: 'completed' }, 'Atendimento concluído')} className="bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90]"><Check /> Concluir</Button>
+                      </>
+                    ) : (
+                      <Button disabled={saving} variant="ghost" size="sm" onClick={() => mutate({ action: 'status', id: item.id, status: 'scheduled' }, 'Atendimento reaberto')} className="font-bold text-[#76687f]">Reabrir</Button>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-dashed border-[#cdbce0] bg-[#f7f3fb] p-7 text-center">
+              <Dog className="mx-auto text-[#9b6bc2]" size={28} />
+              <p className="mt-2 font-heading font-extrabold">Nenhum atendimento hoje</p>
+              <p className="mt-1 text-xs text-[#81748a]">Você pode cadastrar um banho para esta data.</p>
+              <Button onClick={() => { setTodayOpen(false); openNew(today); }} className="mt-4 bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90]"><Plus /> Novo atendimento</Button>
+            </div>
+          )}
+          <DialogFooter className="-mx-5 -mb-5 px-5">
+            <Button variant="outline" onClick={() => setTodayOpen(false)}>Fechar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={planOpen} onOpenChange={(open) => { setPlanOpen(open); if (!open) setSelectedPlanGroupId(null); }}>
         <DialogContent className="max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-5 sm:max-w-2xl">
           <DialogHeader>
@@ -715,10 +820,32 @@ export default function Home() {
             </DialogDescription>
           </DialogHeader>
           {selectedPlanHead && (
-            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[#e4dced] bg-white p-3">
-              <span className="rounded-full bg-[#eee6f7] px-2.5 py-1 text-xs font-extrabold text-[#7353a6]">Plano {planLabels[selectedPlanHead.planType]}</span>
-              <span className={`rounded-full px-2.5 py-1 text-xs font-extrabold ${selectedPlanHead.paid ? 'bg-[#e8f4eb] text-[#4f765c]' : 'bg-[#f7e7e2] text-[#ad533d]'}`}>{selectedPlanHead.paid ? 'Plano pago' : 'Plano pendente'}</span>
-              {formatMoney(selectedPlanHead.amountCents) && <span className="text-xs font-bold text-[#6f6179]">{formatMoney(selectedPlanHead.amountCents)}</span>}
+            <div className="rounded-2xl border border-[#dcd0e8] bg-[#f7f3fb] p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-[#eee6f7] px-2.5 py-1 text-xs font-extrabold text-[#7353a6]">Plano {planLabels[selectedPlanHead.planType]}</span>
+                  <span className={`rounded-full px-2.5 py-1 text-xs font-extrabold ${selectedPlanHead.paid ? 'bg-[#e8f4eb] text-[#4f765c]' : 'bg-[#f7e7e2] text-[#ad533d]'}`}>{selectedPlanHead.paid ? 'Plano pago' : 'Plano pendente'}</span>
+                  {formatMoney(selectedPlanHead.amountCents) && <span className="text-xs font-bold text-[#6f6179]">{formatMoney(selectedPlanHead.amountCents)}</span>}
+                </div>
+                <div className="flex items-center gap-2 text-[11px] font-bold text-[#81748a]">
+                  <span>{selectedPlanStats.completed} concluídos</span><span>·</span><span>{selectedPlanStats.absent} faltas</span><span>·</span><span>{selectedPlanStats.scheduled} abertos</span>
+                </div>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-[#e5dced] pt-3">
+                {selectedPlanHead.whatsapp && <a href={whatsappUrl(selectedPlanHead.whatsapp)} target="_blank" rel="noreferrer" className="grid h-9 w-9 place-items-center rounded-lg bg-[#e6f7eb] text-[#1e8b4c]" aria-label="Abrir WhatsApp"><MessageCircle size={17} /></a>}
+                <Button
+                  disabled={saving}
+                  variant="outline"
+                  onClick={() => mutate(
+                    { action: 'paid', id: selectedPlanHead.id, paid: !selectedPlanHead.paid },
+                    selectedPlanHead.paid ? 'Plano marcado como pendente' : 'Pagamento do plano confirmado',
+                  )}
+                  className={selectedPlanHead.paid ? 'font-bold text-[#568066]' : 'font-bold text-[#c4563c]'}
+                >
+                  <CircleDollarSign /> {selectedPlanHead.paid ? 'Marcar pendente' : 'Marcar plano pago'}
+                </Button>
+                <Button disabled={saving} variant="outline" onClick={deleteFromPlan} className="border-[#ead0cc] font-bold text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f]"><Trash2 /> Apagar plano</Button>
+              </div>
             </div>
           )}
           <div className="space-y-2.5">
@@ -728,17 +855,64 @@ export default function Home() {
                   <div className="flex min-w-0 items-start gap-3">
                     <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#eee6f7] font-heading text-sm font-extrabold text-[#7353a6]">{session.sessionNumber}</span>
                     <div>
-                      <p className="font-heading text-sm font-extrabold capitalize">{prettyDate(session.scheduledDate)} · {session.scheduledTime}</p>
+                      <p className="font-heading text-sm font-extrabold">Sessão {session.sessionNumber} de {session.totalSessions} · {session.scheduledTime}</p>
+                      <p className="mt-0.5 text-xs font-semibold capitalize text-[#81748a]">{prettyDate(session.scheduledDate)}</p>
                       <p className="mt-1 text-xs text-[#81748a]">{session.services.length ? session.services.join(' · ') : 'Sem serviços definidos'}</p>
                     </div>
                   </div>
                   <span className={`rounded-full px-2.5 py-1 text-[11px] font-extrabold ${session.status === 'completed' ? 'bg-[#e8f4eb] text-[#4f765c]' : session.status === 'absent' ? 'bg-[#f7e7e2] text-[#ad533d]' : 'bg-[#f1edf5] text-[#776a80]'}`}>{statusLabels[session.status]}</span>
+                </div>
+                <div className="mt-3 grid gap-2 border-t border-[#eee8f3] pt-3 sm:grid-cols-[minmax(170px,1fr)_auto] sm:items-end">
+                  <label>
+                    <span className="mb-1 block text-[10px] font-extrabold uppercase tracking-[0.08em] text-[#8b7c95]">Alterar data</span>
+                    <Input
+                      type="date"
+                      disabled={saving}
+                      value={session.scheduledDate}
+                      onChange={(event) => {
+                        if (!event.target.value) return;
+                        mutate(
+                          { action: 'move', id: session.id, scheduledDate: event.target.value },
+                          session.sessionNumber === session.totalSessions ? 'Data do banho atualizada' : 'Data e próximas sessões atualizadas',
+                        );
+                      }}
+                      className="h-9 bg-white"
+                    />
+                  </label>
+                  <div className="flex flex-wrap items-center gap-1.5 sm:justify-end">
+                    <Button disabled={saving} variant="ghost" size="icon-sm" aria-label="Mover para o dia anterior" title="Mover para o dia anterior" onClick={() => mutate({ action: 'move', id: session.id, scheduledDate: addDays(session.scheduledDate, -1) }, 'Movido para o dia anterior')}><ChevronLeft /></Button>
+                    <Button disabled={saving} variant="ghost" size="icon-sm" aria-label="Mover para o próximo dia" title="Mover para o próximo dia" onClick={() => mutate({ action: 'move', id: session.id, scheduledDate: addDays(session.scheduledDate, 1) }, 'Movido para o próximo dia')}><ChevronRight /></Button>
+                    <Button disabled={saving} variant="outline" size="sm" onClick={() => editFromOverview(session)}><Pencil /> Editar sessão</Button>
+                    {session.status === 'scheduled' ? (
+                      <>
+                        <Button disabled={saving} variant="outline" size="sm" onClick={() => mutate({ action: 'status', id: session.id, status: 'absent' }, 'Falta registrada')} className="text-[#93503f]"><X /> Falta</Button>
+                        <Button disabled={saving} size="sm" onClick={() => mutate({ action: 'status', id: session.id, status: 'completed' }, 'Atendimento concluído')} className="bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90]"><Check /> Concluir</Button>
+                      </>
+                    ) : (
+                      <Button disabled={saving} variant="ghost" size="sm" onClick={() => mutate({ action: 'status', id: session.id, status: 'scheduled' }, 'Atendimento reaberto')} className="font-bold text-[#76687f]">Reabrir</Button>
+                    )}
+                  </div>
                 </div>
               </article>
             ))}
           </div>
           <DialogFooter className="-mx-5 -mb-5 px-5">
             <Button variant="outline" onClick={() => { setPlanOpen(false); setSelectedPlanGroupId(null); }}>Fechar</Button>
+            {selectedPlanIsRenewable && selectedPlanHead && (
+              <Button
+                disabled={saving}
+                onClick={async () => {
+                  const ok = await mutate({ action: 'renew', groupId: selectedPlanHead.groupId }, 'Plano renovado mantendo o mesmo dia');
+                  if (ok) {
+                    setPlanOpen(false);
+                    setSelectedPlanGroupId(null);
+                  }
+                }}
+                className="bg-[#9b6bc2] font-bold text-white hover:bg-[#8254a8]"
+              >
+                <RefreshCw /> Renovar plano
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
