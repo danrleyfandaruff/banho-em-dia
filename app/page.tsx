@@ -29,7 +29,24 @@ type Appointment = {
   totalSessions: number;
 };
 
-const serviceOptions = ['Banho', 'Tosa higiênica', 'Tosa completa', 'Cortar unhas', 'Limpar ouvidos', 'Escovação'];
+const serviceOptions = [
+  'Banho',
+  'Banho medicamentoso',
+  'Tosa higiênica',
+  'Tosa completa',
+  'Tosa bebê',
+  'Tosa na tesoura',
+  'Tosa de raça',
+  'Aparar pelos',
+  'Cortar unhas',
+  'Limpar ouvidos',
+  'Higiene bucal',
+  'Limpeza dos olhos',
+  'Hidratação',
+  'Escovação',
+  'Desembolo',
+  'Remoção de subpelo',
+];
 const planLabels: Record<PlanType, string> = { monthly: 'Mensal', fortnightly: 'Quinzenal', single: 'Avulso' };
 const planDescriptions: Record<PlanType, string> = {
   monthly: '4 banhos · toda semana', fortnightly: '2 banhos · a cada 15 dias', single: '1 atendimento',
