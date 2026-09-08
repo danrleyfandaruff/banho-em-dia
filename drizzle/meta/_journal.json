@@ -15,6 +15,13 @@
       "when": 1788866289945,
       "tag": "0001_dark_the_call",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788872688491,
+      "tag": "0002_loud_doctor_octopus",
+      "breakpoints": true
     }
   ]
 }

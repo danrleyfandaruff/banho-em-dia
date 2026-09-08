@@ -2,9 +2,10 @@
 
 import { DragEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import {
-  CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight, CircleDollarSign,
-  Clock3, Dog, GripVertical, MessageCircle, PawPrint, Pencil, Plus, RefreshCw,
-  Scissors, Sparkles, UserRound, X,
+  Activity, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight,
+  CircleDollarSign, Clock3, Dog, GripVertical, History, LogOut, MessageCircle,
+  PawPrint, Pencil, Plus, RefreshCw, Scissors, ShieldCheck, Sparkles, UserPlus,
+  UserRound, Users, X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -31,6 +32,18 @@ type Appointment = {
   services: string[];
   sessionNumber: number;
   totalSessions: number;
+};
+type CurrentUser = { id: string; name: string; email: string; role: 'admin' | 'staff' };
+type TeamUser = CurrentUser & { active: boolean; createdAt: string; lastLoginAt: string | null };
+type AuditLog = {
+  id: string;
+  actorEmail: string;
+  actorName: string;
+  action: string;
+  entityType: string;
+  entityId: string;
+  description: string;
+  createdAt: string;
 };
 
 const serviceOptions = [
@@ -100,6 +113,9 @@ const emptyForm = () => ({
 
 export default function Home() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [authStatus, setAuthStatus] = useState<'loading' | 'authorized' | 'signed_out' | 'forbidden'>('loading');
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [blockedEmail, setBlockedEmail] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
@@ -111,14 +127,37 @@ export default function Home() {
   const [notice, setNotice] = useState('');
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const [teamOpen, setTeamOpen] = useState(false);
+  const [logsOpen, setLogsOpen] = useState(false);
+  const [teamUsers, setTeamUsers] = useState<TeamUser[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [panelLoading, setPanelLoading] = useState(false);
+  const [newUser, setNewUser] = useState({ name: '', email: '', role: 'staff' as 'admin' | 'staff' });
   const today = localDateString();
 
   useEffect(() => {
-    fetch('/api/appointments')
-      .then((response) => response.json())
-      .then((data) => setAppointments(data.appointments ?? []))
-      .catch(() => setNotice('Não foi possível carregar a agenda. Tente novamente.'))
-      .finally(() => setLoading(false));
+    async function load() {
+      try {
+        const sessionResponse = await fetch('/api/session');
+        const session = await sessionResponse.json();
+        if (!sessionResponse.ok) {
+          setAuthStatus(sessionResponse.status === 401 ? 'signed_out' : 'forbidden');
+          setBlockedEmail(session.email ?? '');
+          return;
+        }
+        setCurrentUser(session.user);
+        setAuthStatus('authorized');
+        const response = await fetch('/api/appointments');
+        if (!response.ok) throw new Error('request failed');
+        const data = await response.json();
+        setAppointments(data.appointments ?? []);
+      } catch {
+        setNotice('Não foi possível carregar a agenda. Tente novamente.');
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
   }, []);
 
   const days = useMemo(() => Array.from({ length: daysShown }, (_, index) => addDays(today, index)), [daysShown, today]);
@@ -230,6 +269,117 @@ export default function Home() {
     if (!ok) setAppointments(previous);
   }
 
+  async function openTeam() {
+    setTeamOpen(true);
+    setPanelLoading(true);
+    try {
+      const response = await fetch('/api/team');
+      const data = await response.json();
+      if (!response.ok) throw new Error('request failed');
+      setTeamUsers(data.users ?? []);
+    } catch {
+      setNotice('Não foi possível carregar a equipe.');
+    } finally {
+      setPanelLoading(false);
+    }
+  }
+
+  async function addTeamUser(event: FormEvent) {
+    event.preventDefault();
+    setPanelLoading(true);
+    try {
+      const response = await fetch('/api/team', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newUser),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setNotice(data.error === 'email_exists' ? 'Este e-mail já possui acesso.' : 'Informe um e-mail válido.');
+        return;
+      }
+      setTeamUsers(data.users ?? []);
+      setNewUser({ name: '', email: '', role: 'staff' });
+      setNotice('Novo acesso criado');
+    } catch {
+      setNotice('Não foi possível criar o acesso.');
+    } finally {
+      setPanelLoading(false);
+    }
+  }
+
+  async function updateTeamUser(user: TeamUser, changes: Partial<Pick<TeamUser, 'active' | 'role'>>) {
+    setPanelLoading(true);
+    try {
+      const response = await fetch('/api/team', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: user.id, active: changes.active ?? user.active, role: changes.role ?? user.role }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error('request failed');
+      setTeamUsers(data.users ?? []);
+      setNotice(changes.active === false ? 'Acesso desativado' : 'Acesso atualizado');
+    } catch {
+      setNotice('Não foi possível atualizar o acesso.');
+    } finally {
+      setPanelLoading(false);
+    }
+  }
+
+  async function openLogs() {
+    setLogsOpen(true);
+    setPanelLoading(true);
+    try {
+      const response = await fetch('/api/audit');
+      const data = await response.json();
+      if (!response.ok) throw new Error('request failed');
+      setAuditLogs(data.logs ?? []);
+    } catch {
+      setNotice('Não foi possível carregar o histórico.');
+    } finally {
+      setPanelLoading(false);
+    }
+  }
+
+  if (authStatus === 'loading') {
+    return (
+      <main className="grid min-h-screen place-items-center bg-[#f7f3fb] px-5 text-[#302638]">
+        <div className="text-center"><PawPrint className="mx-auto mb-3 text-[#7353a6]" size={38} /><p className="font-heading font-extrabold">Abrindo o HEIN PET SALON...</p></div>
+      </main>
+    );
+  }
+
+  if (authStatus === 'signed_out') {
+    return (
+      <main className="grid min-h-screen place-items-center bg-[#f7f3fb] px-5 text-[#302638]">
+        <section className="w-full max-w-md rounded-3xl border border-[#e4dced] bg-[#fffbff] p-8 text-center shadow-[0_18px_60px_rgba(91,67,116,0.13)]">
+          <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#7353a6] text-white"><PawPrint size={28} /></span>
+          <p className="mt-5 text-xs font-extrabold uppercase tracking-[0.16em] text-[#8b7c95]">Pet shop</p>
+          <h1 className="mt-1 font-heading text-3xl font-extrabold tracking-[-0.04em]">HEIN PET SALON</h1>
+          <p className="mx-auto mt-3 max-w-xs text-sm leading-6 text-[#786b82]">Entre com a conta autorizada pela administração para acessar a agenda.</p>
+          <a href="/signin-with-chatgpt?return_to=%2F" target="_top" className="mt-7 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#7353a6] px-4 text-sm font-extrabold text-white shadow-[0_8px_24px_rgba(115,83,166,0.24)] transition hover:bg-[#5e3f90]">
+            <ShieldCheck size={19} /> Entrar com ChatGPT
+          </a>
+        </section>
+      </main>
+    );
+  }
+
+  if (authStatus === 'forbidden') {
+    return (
+      <main className="grid min-h-screen place-items-center bg-[#f7f3fb] px-5 text-[#302638]">
+        <section className="w-full max-w-md rounded-3xl border border-[#e4dced] bg-[#fffbff] p-8 text-center shadow-[0_18px_60px_rgba(91,67,116,0.13)]">
+          <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#eee6f7] text-[#7353a6]"><Users size={27} /></span>
+          <h1 className="mt-5 font-heading text-2xl font-extrabold">Acesso ainda não liberado</h1>
+          <p className="mt-3 text-sm leading-6 text-[#786b82]">Peça ao administrador para cadastrar este e-mail na equipe:</p>
+          {blockedEmail && <p className="mt-2 rounded-xl bg-[#f1ecf7] px-3 py-2 text-sm font-extrabold text-[#7353a6]">{blockedEmail}</p>}
+          <a href="/signout-with-chatgpt?return_to=%2F" target="_top" className="mt-6 inline-flex items-center gap-2 text-sm font-bold text-[#7353a6] hover:underline"><LogOut size={16} /> Entrar com outra conta</a>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen bg-[#f7f3fb] text-[#302638]">
       <header className="sticky top-0 z-20 border-b border-[#e4dced] bg-[#fffbff]/95 backdrop-blur">
@@ -238,12 +388,25 @@ export default function Home() {
             <span className="grid h-10 w-10 place-items-center rounded-xl bg-[#7353a6] text-white shadow-sm"><PawPrint size={21} strokeWidth={2.2} /></span>
             <div>
               <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#85768f]">Pet shop</p>
-              <h1 className="font-heading text-lg font-extrabold tracking-[-0.03em] sm:text-xl">Banho em Dia</h1>
+              <h1 className="font-heading text-lg font-extrabold tracking-[-0.03em] sm:text-xl">HEIN PET SALON</h1>
             </div>
           </div>
-          <Button onClick={() => openNew()} className="h-11 rounded-xl bg-[#9b6bc2] px-3.5 font-bold text-white shadow-[0_5px_16px_rgba(115,83,166,0.24)] hover:bg-[#8254a8] sm:px-4">
-            <Plus /> <span className="hidden sm:inline">Novo agendamento</span><span className="sm:hidden">Novo</span>
-          </Button>
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            {currentUser?.role === 'admin' && (
+              <>
+                <Button variant="ghost" size="icon" onClick={openLogs} aria-label="Abrir histórico" title="Histórico" className="text-[#685872]"><History /></Button>
+                <Button variant="ghost" size="icon" onClick={openTeam} aria-label="Gerenciar equipe" title="Equipe" className="text-[#685872]"><Users /></Button>
+              </>
+            )}
+            <div className="hidden text-right md:block">
+              <p className="max-w-36 truncate text-xs font-extrabold">{currentUser?.name}</p>
+              <p className="text-[10px] font-semibold text-[#8b7c95]">{currentUser?.role === 'admin' ? 'Administrador' : 'Equipe'}</p>
+            </div>
+            <a href="/signout-with-chatgpt?return_to=%2F" target="_top" aria-label="Sair" title="Sair" className="grid h-9 w-9 place-items-center rounded-lg text-[#7f7189] transition hover:bg-[#eee7f5]"><LogOut size={17} /></a>
+            <Button onClick={() => openNew()} className="h-11 rounded-xl bg-[#9b6bc2] px-3.5 font-bold text-white shadow-[0_5px_16px_rgba(115,83,166,0.24)] hover:bg-[#8254a8] sm:px-4">
+              <Plus /> <span className="hidden sm:inline">Novo agendamento</span><span className="sm:hidden">Novo</span>
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -527,6 +690,68 @@ export default function Home() {
             <div><span className="mb-2 block text-xs font-bold text-[#6f6179]">O que é para fazer</span><div className="flex flex-wrap gap-2">{serviceOptions.map((service) => <button type="button" key={service} onClick={() => toggleService(service, true)} className={`rounded-full border px-3 py-2 text-xs font-bold ${editing.services.includes(service) ? 'border-[#7353a6] bg-[#7353a6] text-white' : 'border-[#e4dced] bg-white text-[#6f6179]'}`}>{service}</button>)}</div></div>
             <DialogFooter className="-mx-5 -mb-5 px-5"><Button type="button" variant="outline" onClick={() => setEditOpen(false)}>Cancelar</Button><Button type="submit" disabled={saving} className="bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90]">Salvar alterações</Button></DialogFooter>
           </form>}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={teamOpen} onOpenChange={setTeamOpen}>
+        <DialogContent className="max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-5 sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><Users className="text-[#7353a6]" /> Equipe e acessos</DialogTitle>
+            <DialogDescription>Cadastre o e-mail usado na conta do ChatGPT. A pessoa entra pelo mesmo endereço do sistema.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={addTeamUser} className="rounded-2xl border border-[#dfd5e8] bg-[#f7f3fb] p-4">
+            <p className="mb-3 flex items-center gap-2 text-sm font-extrabold text-[#574761]"><UserPlus size={17} /> Criar novo acesso</p>
+            <div className="grid gap-3 sm:grid-cols-[1fr_1.35fr_140px]">
+              <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Nome</span><Input value={newUser.name} onChange={(event) => setNewUser({ ...newUser, name: event.target.value })} placeholder="Ex.: Maria" className="h-11 bg-white" /></label>
+              <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">E-mail da conta</span><Input required type="email" value={newUser.email} onChange={(event) => setNewUser({ ...newUser, email: event.target.value })} placeholder="maria@email.com" className="h-11 bg-white" /></label>
+              <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Permissão</span><select value={newUser.role} onChange={(event) => setNewUser({ ...newUser, role: event.target.value as 'admin' | 'staff' })} className="h-11 w-full rounded-md border border-input bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#7353a6]/30"><option value="staff">Equipe</option><option value="admin">Administrador</option></select></label>
+            </div>
+            <Button type="submit" disabled={panelLoading} className="mt-3 bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90]"><Plus /> {panelLoading ? 'Salvando...' : 'Criar acesso'}</Button>
+          </form>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between"><p className="text-sm font-extrabold">Pessoas cadastradas</p><span className="text-xs font-semibold text-[#8b7c95]">{teamUsers.filter((user) => user.active).length} ativos</span></div>
+            {panelLoading && teamUsers.length === 0 ? (
+              <p className="rounded-xl bg-[#f1ecf7] p-4 text-sm font-semibold text-[#81748a]">Carregando equipe...</p>
+            ) : teamUsers.map((user) => (
+              <div key={user.id} className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border p-3.5 ${user.active ? 'border-[#e4dced] bg-white' : 'border-[#eadfdf] bg-[#faf6f6] opacity-70'}`}>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-extrabold">{user.name || user.email} {user.id === currentUser?.id && <span className="ml-1 text-[10px] text-[#7353a6]">VOCÊ</span>}</p>
+                  <p className="truncate text-xs text-[#81748a]">{user.email}</p>
+                  <p className="mt-1 text-[10px] font-semibold text-[#9a8ca3]">{user.lastLoginAt ? `Último acesso: ${new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(user.lastLoginAt))}` : 'Ainda não entrou'}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <select disabled={user.id === currentUser?.id || panelLoading} value={user.role} onChange={(event) => updateTeamUser(user, { role: event.target.value as 'admin' | 'staff' })} aria-label={`Permissão de ${user.name || user.email}`} className="h-9 rounded-lg border border-input bg-white px-2 text-xs font-bold"><option value="staff">Equipe</option><option value="admin">Admin</option></select>
+                  {user.id !== currentUser?.id && <Button disabled={panelLoading} variant="outline" size="sm" onClick={() => updateTeamUser(user, { active: !user.active })} className={user.active ? 'text-[#a04c42]' : 'text-[#4b765c]'}>{user.active ? 'Desativar' : 'Ativar'}</Button>}
+                </div>
+              </div>
+            ))}
+          </div>
+          <DialogFooter className="-mx-5 -mb-5 px-5"><Button variant="outline" onClick={() => setTeamOpen(false)}>Fechar</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={logsOpen} onOpenChange={setLogsOpen}>
+        <DialogContent className="max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-5 sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><Activity className="text-[#7353a6]" /> Histórico de atividades</DialogTitle>
+            <DialogDescription>Últimas alterações feitas pela equipe na agenda e nos acessos.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            {panelLoading && auditLogs.length === 0 ? (
+              <p className="rounded-xl bg-[#f1ecf7] p-5 text-center text-sm font-semibold text-[#81748a]">Carregando histórico...</p>
+            ) : auditLogs.length === 0 ? (
+              <p className="rounded-xl bg-[#f1ecf7] p-5 text-center text-sm font-semibold text-[#81748a]">Nenhuma atividade registrada ainda.</p>
+            ) : auditLogs.map((log) => (
+              <div key={log.id} className="grid grid-cols-[34px_minmax(0,1fr)] gap-3 rounded-xl border border-[#e4dced] bg-white p-3.5">
+                <span className="grid h-8 w-8 place-items-center rounded-lg bg-[#eee6f7] text-[#7353a6]"><Activity size={15} /></span>
+                <div>
+                  <p className="text-sm font-bold leading-5">{log.description}</p>
+                  <p className="mt-1 text-xs text-[#81748a]"><strong>{log.actorName || log.actorEmail}</strong> · {new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(log.createdAt))}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+          <DialogFooter className="-mx-5 -mb-5 px-5"><Button variant="outline" onClick={() => setLogsOpen(false)}>Fechar</Button></DialogFooter>
         </DialogContent>
       </Dialog>
     </main>

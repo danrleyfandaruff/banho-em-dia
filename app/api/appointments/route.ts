@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { requireAuthorized, writeAudit } from '@/lib/auth';
 
 type AppointmentRow = {
   id: string;
@@ -116,12 +117,20 @@ async function listAppointments() {
   return results.results.map(mapRow);
 }
 
-export async function GET() {
+function appointmentName(row: Pick<AppointmentRow, 'dog_name' | 'owner_name' | 'customer_pet_name'>) {
+  return row.dog_name || row.owner_name || row.customer_pet_name || 'agendamento sem nome';
+}
+
+export async function GET(request: Request) {
+  const auth = await requireAuthorized(request);
+  if (auth.response) return auth.response;
   await ensureSchema();
   return Response.json({ appointments: await listAppointments() });
 }
 
 export async function POST(request: Request) {
+  const auth = await requireAuthorized(request);
+  if (auth.response || !auth.user) return auth.response;
   await ensureSchema();
   const body = (await request.json()) as Record<string, unknown>;
   const action = String(body.action ?? 'create');
@@ -170,38 +179,72 @@ export async function POST(request: Request) {
       ),
     );
     await db.batch(statements);
+    await writeAudit(
+      auth.user, 'appointment_created', 'appointment_group', groupId,
+      `Criou ${totalSessions === 1 ? 'um banho avulso' : `um plano com ${totalSessions} sessões`} para ${dogName || ownerName || 'cliente sem nome'}`,
+      { planType, totalSessions, startDate },
+    );
   }
 
   if (action === 'status') {
+    const target = await db.prepare('SELECT * FROM appointments WHERE id = ?')
+      .bind(String(body.id ?? ''))
+      .first<AppointmentRow>();
     await db.prepare('UPDATE appointments SET status = ? WHERE id = ?')
       .bind(String(body.status ?? 'scheduled'), String(body.id ?? ''))
       .run();
+    if (target) {
+      const statusLabels: Record<string, string> = {
+        scheduled: 'Reabriu', completed: 'Concluiu', absent: 'Registrou falta em',
+      };
+      const status = String(body.status ?? 'scheduled');
+      await writeAudit(
+        auth.user, 'appointment_status', 'appointment', target.id,
+        `${statusLabels[status] ?? 'Alterou'} o atendimento de ${appointmentName(target)}`,
+        { from: target.status, to: status, scheduledDate: target.scheduled_date },
+      );
+    }
   }
 
   if (action === 'paid') {
-    const row = await db.prepare('SELECT group_id FROM appointments WHERE id = ?')
+    const row = await db.prepare('SELECT * FROM appointments WHERE id = ?')
       .bind(String(body.id ?? ''))
-      .first<{ group_id: string }>();
+      .first<AppointmentRow>();
     if (row) {
       await db.prepare('UPDATE appointments SET paid = ? WHERE group_id = ?')
         .bind(body.paid ? 1 : 0, row.group_id)
         .run();
+      await writeAudit(
+        auth.user, 'payment_updated', 'appointment_group', row.group_id,
+        `${body.paid ? 'Confirmou' : 'Desmarcou'} o pagamento de ${appointmentName(row)}`,
+        { paid: Boolean(body.paid), amountCents: row.amount_cents },
+      );
     }
   }
 
   if (action === 'move') {
+    const target = await db.prepare('SELECT * FROM appointments WHERE id = ?')
+      .bind(String(body.id ?? ''))
+      .first<AppointmentRow>();
     await db.prepare('UPDATE appointments SET scheduled_date = ? WHERE id = ?')
       .bind(String(body.scheduledDate ?? ''), String(body.id ?? ''))
       .run();
+    if (target) {
+      await writeAudit(
+        auth.user, 'appointment_moved', 'appointment', target.id,
+        `Moveu o atendimento de ${appointmentName(target)} de ${target.scheduled_date} para ${String(body.scheduledDate ?? '')}`,
+        { from: target.scheduled_date, to: String(body.scheduledDate ?? '') },
+      );
+    }
   }
 
   if (action === 'edit') {
     const ownerName = String(body.ownerName ?? '');
     const dogName = String(body.dogName ?? '');
     const id = String(body.id ?? '');
-    const row = await db.prepare('SELECT group_id FROM appointments WHERE id = ?')
+    const row = await db.prepare('SELECT * FROM appointments WHERE id = ?')
       .bind(id)
-      .first<{ group_id: string }>();
+      .first<AppointmentRow>();
     if (row) {
       await db.batch([
         db.prepare(
@@ -222,6 +265,11 @@ export async function POST(request: Request) {
           id,
         ),
       ]);
+      await writeAudit(
+        auth.user, 'appointment_edited', 'appointment', id,
+        `Editou o atendimento de ${dogName || ownerName || appointmentName(row)}`,
+        { scheduledDate: row.scheduled_date, sessionNumber: row.session_number },
+      );
     }
   }
 
@@ -251,6 +299,11 @@ export async function POST(request: Request) {
           previousSessions[index]?.services ?? previous.services, index + 1, totalSessions, createdAt,
         ),
       ));
+      await writeAudit(
+        auth.user, 'plan_renewed', 'appointment_group', groupId,
+        `Renovou o plano de ${appointmentName(previous)}`,
+        { previousGroupId: previous.group_id, planType: previous.plan_type, totalSessions },
+      );
     }
   }
 
