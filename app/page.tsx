@@ -98,6 +98,17 @@ function formatMoney(cents: number | null) {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(cents / 100);
 }
 
+function maskReal(value: string) {
+  const digits = value.replace(/\D/g, '');
+  if (!digits) return '';
+  return formatMoney(Number(digits)) ?? '';
+}
+
+function realToCents(value: string) {
+  const digits = value.replace(/\D/g, '');
+  return digits ? Number(digits) : null;
+}
+
 function whatsappUrl(value: string) {
   const digits = value.replace(/\D/g, '');
   if (!digits) return '';
@@ -223,7 +234,7 @@ export default function Home() {
     event.preventDefault();
     const ok = await mutate({
       action: 'create', ...form,
-      amountCents: form.amount ? Math.round(Number(form.amount.replace(',', '.')) * 100) : null,
+      amountCents: realToCents(form.amount),
     }, 'Agendamento criado');
     if (ok) setNewOpen(false);
   }
@@ -620,7 +631,7 @@ export default function Home() {
             <div className="grid gap-3 sm:grid-cols-3">
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Primeiro banho</span><Input type="date" value={form.scheduledDate} onChange={(event) => setForm({ ...form, scheduledDate: event.target.value })} className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Horário</span><Input type="time" value={form.scheduledTime} onChange={(event) => setForm({ ...form, scheduledTime: event.target.value })} className="h-11 bg-white" /></label>
-              <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Valor (opcional)</span><Input inputMode="decimal" value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value })} placeholder="R$ 0,00" className="h-11 bg-white" /></label>
+              <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Valor (opcional)</span><Input inputMode="numeric" value={form.amount} onChange={(event) => setForm({ ...form, amount: maskReal(event.target.value) })} placeholder="R$ 0,00" className="h-11 bg-white font-semibold tabular-nums" /></label>
             </div>
             <div className="rounded-2xl border border-[#e4dced] bg-white p-3.5">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -685,7 +696,7 @@ export default function Home() {
             <label className="block"><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><MessageCircle size={14} /> WhatsApp</span><Input type="tel" inputMode="tel" value={editing.whatsapp} onChange={(event) => setEditing({ ...editing, whatsapp: event.target.value })} placeholder="(47) 99999-9999" className="h-11 bg-white" /></label>
             <div className="grid gap-3 sm:grid-cols-2">
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Horário</span><Input type="time" value={editing.scheduledTime} onChange={(event) => setEditing({ ...editing, scheduledTime: event.target.value })} className="h-11 bg-white" /></label>
-              <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Valor (opcional)</span><Input inputMode="decimal" value={editing.amountCents === null ? '' : String(editing.amountCents / 100).replace('.', ',')} onChange={(event) => setEditing({ ...editing, amountCents: event.target.value ? Math.round(Number(event.target.value.replace(',', '.')) * 100) : null })} className="h-11 bg-white" /></label>
+              <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Valor (opcional)</span><Input inputMode="numeric" value={formatMoney(editing.amountCents) ?? ''} onChange={(event) => setEditing({ ...editing, amountCents: realToCents(event.target.value) })} placeholder="R$ 0,00" className="h-11 bg-white font-semibold tabular-nums" /></label>
             </div>
             <div><span className="mb-2 block text-xs font-bold text-[#6f6179]">O que é para fazer</span><div className="flex flex-wrap gap-2">{serviceOptions.map((service) => <button type="button" key={service} onClick={() => toggleService(service, true)} className={`rounded-full border px-3 py-2 text-xs font-bold ${editing.services.includes(service) ? 'border-[#7353a6] bg-[#7353a6] text-white' : 'border-[#e4dced] bg-white text-[#6f6179]'}`}>{service}</button>)}</div></div>
             <DialogFooter className="-mx-5 -mb-5 px-5"><Button type="button" variant="outline" onClick={() => setEditOpen(false)}>Cancelar</Button><Button type="submit" disabled={saving} className="bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90]">Salvar alterações</Button></DialogFooter>
