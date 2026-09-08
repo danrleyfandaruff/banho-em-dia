@@ -589,8 +589,18 @@ export default function Home() {
                                     </a>
                                   )}
                                   <span className="rounded-full bg-[#eee6f7] px-2 py-0.5 text-[11px] font-bold text-[#7353a6]">{planLabels[item.planType]} · {item.sessionNumber} de {item.totalSessions}</span>
-                                  <button disabled={saving} onClick={() => mutate({ action: 'paid', id: item.id, paid: !item.paid }, item.paid ? 'Marcado como pendente' : 'Pagamento confirmado')} className={`inline-flex items-center gap-1 text-[11px] font-bold disabled:opacity-50 ${item.paid ? 'text-[#568066]' : 'text-[#c4563c]'}`}>
-                                    <CircleDollarSign size={13} /> {item.paid ? 'Pago' : 'Pendente'}
+                                  <button
+                                    disabled={saving}
+                                    title={item.planType === 'single' ? 'Pagamento deste banho' : 'Pagamento único para todo o plano'}
+                                    onClick={() => mutate(
+                                      { action: 'paid', id: item.id, paid: !item.paid },
+                                      item.planType === 'single'
+                                        ? item.paid ? 'Banho marcado como pendente' : 'Pagamento do banho confirmado'
+                                        : item.paid ? 'Plano marcado como pendente' : 'Pagamento do plano confirmado',
+                                    )}
+                                    className={`inline-flex items-center gap-1 text-[11px] font-bold disabled:opacity-50 ${item.paid ? 'text-[#568066]' : 'text-[#c4563c]'}`}
+                                  >
+                                    <CircleDollarSign size={13} /> {item.planType === 'single' ? (item.paid ? 'Pago' : 'Pendente') : (item.paid ? 'Plano pago' : 'Plano pendente')}
                                   </button>
                                   {formatMoney(item.amountCents) && <span className="text-[11px] font-semibold text-[#81748a]">{formatMoney(item.amountCents)}</span>}
                                 </div>
@@ -647,8 +657,8 @@ export default function Home() {
             ) : (
               <div className="space-y-3 text-sm">
                 {pendingGroups.slice(0, 3).map((item) => (
-                  <button disabled={saving} key={`pending-${item.groupId}`} onClick={() => mutate({ action: 'paid', id: item.id, paid: true }, 'Pagamento confirmado')} className="w-full rounded-xl bg-[#f7eee9] p-3 text-left transition hover:bg-[#f2e3da] disabled:opacity-50">
-                    <p className="font-bold">{item.dogName || item.ownerName || 'Sem nome'} · pendente</p><p className="mt-1 text-xs text-[#7e7771]">Toque para marcar como pago</p>
+                  <button disabled={saving} key={`pending-${item.groupId}`} onClick={() => mutate({ action: 'paid', id: item.id, paid: true }, item.planType === 'single' ? 'Pagamento do banho confirmado' : 'Pagamento do plano confirmado')} className="w-full rounded-xl bg-[#f7eee9] p-3 text-left transition hover:bg-[#f2e3da] disabled:opacity-50">
+                    <p className="font-bold">{item.dogName || item.ownerName || 'Sem nome'} · {item.planType === 'single' ? 'banho pendente' : 'plano pendente'}</p><p className="mt-1 text-xs text-[#7e7771]">{item.planType === 'single' ? 'Toque para marcar o banho como pago' : 'Toque para marcar todas as sessões como pagas'}</p>
                   </button>
                 ))}
                 {renewalItems.slice(0, 3).map((item) => (
@@ -748,7 +758,7 @@ export default function Home() {
                 })}
               </div>
             </div>
-            <label className="flex cursor-pointer items-center justify-between rounded-xl border border-[#e4dced] bg-white p-3.5"><span><strong className="block text-sm">Já está pago?</strong><small className="text-xs text-[#85768f]">Você pode mudar isso depois</small></span><Switch checked={form.paid} onCheckedChange={(checked) => setForm({ ...form, paid: checked })} /></label>
+            <label className="flex cursor-pointer items-center justify-between rounded-xl border border-[#e4dced] bg-white p-3.5"><span><strong className="block text-sm">{form.planType === 'single' ? 'O banho já está pago?' : 'O plano já está pago?'}</strong><small className="text-xs text-[#85768f]">{form.planType === 'single' ? 'Você pode mudar isso depois' : `Pagamento único para todas as ${totalSessionsFor(form.planType)} sessões`}</small></span><Switch checked={form.paid} onCheckedChange={(checked) => setForm({ ...form, paid: checked })} /></label>
             <DialogFooter className="-mx-5 -mb-5 px-5">
               <Button type="button" variant="outline" onClick={() => setNewOpen(false)}>Cancelar</Button>
               <Button type="submit" disabled={saving} className="bg-[#9b6bc2] font-bold text-white hover:bg-[#8254a8]">{saving ? <LoaderCircle className="animate-spin" /> : <Sparkles />} {saving ? 'Salvando...' : 'Criar agendamento'}</Button>

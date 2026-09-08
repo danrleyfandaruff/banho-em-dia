@@ -238,8 +238,12 @@ export async function POST(request: Request) {
         .run();
       await writeAudit(
         auth.user, 'payment_updated', 'appointment_group', row.group_id,
-        `${body.paid ? 'Confirmou' : 'Desmarcou'} o pagamento de ${appointmentName(row)}`,
-        { paid: Boolean(body.paid), amountCents: row.amount_cents },
+        `${body.paid ? 'Confirmou' : 'Desmarcou'} o pagamento ${row.plan_type === 'single' ? 'do banho avulso' : 'do plano'} de ${appointmentName(row)}`,
+        {
+          paid: Boolean(body.paid),
+          amountCents: row.amount_cents,
+          appliesToEntirePlan: row.plan_type !== 'single',
+        },
       );
     }
   }
