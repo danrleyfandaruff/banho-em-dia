@@ -159,6 +159,7 @@ export default function Home() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
   const [todayOpen, setTodayOpen] = useState(false);
+  const [planReturnToToday, setPlanReturnToToday] = useState(false);
   const [selectedPlanGroupId, setSelectedPlanGroupId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [activeServiceSession, setActiveServiceSession] = useState(0);
@@ -323,28 +324,39 @@ export default function Home() {
     setDeleteOpen(true);
   }
 
-  function openPlan(item: Appointment) {
+  function openPlan(item: Appointment, returnToToday = false) {
     setSelectedPlanGroupId(item.groupId);
+    setPlanReturnToToday(returnToToday);
     setPlanOpen(true);
+  }
+
+  function closePlan() {
+    setPlanOpen(false);
+    setSelectedPlanGroupId(null);
+    if (planReturnToToday) setTodayOpen(true);
+    setPlanReturnToToday(false);
   }
 
   function editFromOverview(item: Appointment) {
     setTodayOpen(false);
     setPlanOpen(false);
+    setPlanReturnToToday(false);
     setSelectedPlanGroupId(null);
     openEdit(item);
   }
 
   function deleteFromPlan() {
     if (!selectedPlanHead) return;
+    setTodayOpen(false);
     setPlanOpen(false);
+    setPlanReturnToToday(false);
     setSelectedPlanGroupId(null);
     openDelete(selectedPlanHead);
   }
 
   function openPlanFromToday(item: Appointment) {
     setTodayOpen(false);
-    openPlan(item);
+    openPlan(item, true);
   }
 
   async function saveEdit(event: FormEvent) {
@@ -809,7 +821,7 @@ export default function Home() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={planOpen} onOpenChange={(open) => { setPlanOpen(open); if (!open) setSelectedPlanGroupId(null); }}>
+      <Dialog open={planOpen} onOpenChange={(open) => { if (open) setPlanOpen(true); else closePlan(); }}>
         <DialogContent className="max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-5 sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><ListChecks className="text-[#7353a6]" /> Atendimentos do plano</DialogTitle>
@@ -897,7 +909,7 @@ export default function Home() {
             ))}
           </div>
           <DialogFooter className="-mx-5 -mb-5 px-5">
-            <Button variant="outline" onClick={() => { setPlanOpen(false); setSelectedPlanGroupId(null); }}>Fechar</Button>
+            <Button variant="outline" onClick={closePlan}>{planReturnToToday ? 'Voltar para atendimentos de hoje' : 'Fechar'}</Button>
             {selectedPlanIsRenewable && selectedPlanHead && (
               <Button
                 disabled={saving}
@@ -905,6 +917,7 @@ export default function Home() {
                   const ok = await mutate({ action: 'renew', groupId: selectedPlanHead.groupId }, 'Plano renovado mantendo o mesmo dia');
                   if (ok) {
                     setPlanOpen(false);
+                    setPlanReturnToToday(false);
                     setSelectedPlanGroupId(null);
                   }
                 }}
