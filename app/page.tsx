@@ -88,6 +88,23 @@ function addDays(dateString: string, amount: number) {
   return localDateString(date);
 }
 
+function addMonths(monthString: string, amount: number) {
+  const [year, month] = monthString.split('-').map(Number);
+  const date = new Date(year, month - 1 + amount, 1, 12);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function daysInMonth(monthString: string) {
+  const [year, month] = monthString.split('-').map(Number);
+  const total = new Date(year, month, 0).getDate();
+  return Array.from({ length: total }, (_, index) => `${monthString}-${String(index + 1).padStart(2, '0')}`);
+}
+
+function prettyMonth(monthString: string) {
+  return new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric' })
+    .format(new Date(`${monthString}-01T12:00:00`));
+}
+
 function prettyDate(dateString: string) {
   return new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })
     .format(new Date(`${dateString}T12:00:00`)).replace('-feira', '');
@@ -134,7 +151,7 @@ export default function Home() {
   const [form, setForm] = useState(emptyForm);
   const [activeServiceSession, setActiveServiceSession] = useState(0);
   const [editing, setEditing] = useState<Appointment | null>(null);
-  const [daysShown, setDaysShown] = useState(14);
+  const [selectedMonth, setSelectedMonth] = useState(() => localDateString().slice(0, 7));
   const [notice, setNotice] = useState('');
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -171,7 +188,7 @@ export default function Home() {
     load();
   }, []);
 
-  const days = useMemo(() => Array.from({ length: daysShown }, (_, index) => addDays(today, index)), [daysShown, today]);
+  const days = useMemo(() => daysInMonth(selectedMonth), [selectedMonth]);
   const groupStats = useMemo(() => {
     const stats = new Map<string, { completed: number; absent: number }>();
     appointments.forEach((item) => {
@@ -250,8 +267,9 @@ export default function Home() {
     const ok = await mutate({
       action: 'edit', id: editing.id, ownerName: editing.ownerName, dogName: editing.dogName,
       whatsapp: editing.whatsapp,
-      scheduledTime: editing.scheduledTime, services: editing.services, amountCents: editing.amountCents,
-    }, 'Atendimento atualizado');
+      scheduledDate: editing.scheduledDate, scheduledTime: editing.scheduledTime,
+      services: editing.services, amountCents: editing.amountCents,
+    }, editing.planType === 'single' ? 'Atendimento atualizado' : 'Atendimento e próximas sessões atualizados');
     if (ok) setEditOpen(false);
   }
 
@@ -431,20 +449,22 @@ export default function Home() {
         <section>
           <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
             <div>
-              <p className="mb-1 text-sm font-semibold capitalize text-[#86778f]">Agenda de {new Intl.DateTimeFormat('pt-BR', { month: 'long' }).format(new Date())}</p>
-              <h2 className="font-heading text-[30px] font-extrabold tracking-[-0.045em] sm:text-[34px]">Próximos banhos</h2>
+              <p className="mb-1 text-sm font-semibold text-[#86778f]">Agenda mensal</p>
+              <h2 className="font-heading text-[30px] font-extrabold capitalize tracking-[-0.045em] sm:text-[34px]">{prettyMonth(selectedMonth)}</h2>
               <p className="mt-1 hidden text-xs font-semibold text-[#92849c] sm:block">Arraste pelo ícone <GripVertical className="inline" size={14} /> para trocar o dia</p>
             </div>
-            <Button variant="outline" onClick={() => setDaysShown((value) => value === 14 ? 30 : 14)} className="h-10 bg-white px-3.5 font-semibold text-[#62556c] shadow-sm">
-              <CalendarDays /> {daysShown === 14 ? 'Ver 30 dias' : 'Ver 14 dias'}
-            </Button>
+            <div className="flex items-center gap-1.5 rounded-xl border border-[#e4dced] bg-white p-1 shadow-sm">
+              <Button variant="ghost" size="icon-sm" onClick={() => setSelectedMonth((month) => addMonths(month, -1))} aria-label="Mês anterior" title="Mês anterior"><ChevronLeft /></Button>
+              <button type="button" onClick={() => setSelectedMonth(today.slice(0, 7))} className="inline-flex h-8 min-w-28 items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-extrabold capitalize text-[#62556c] transition hover:bg-[#f1ecf7] sm:min-w-36"><CalendarDays size={15} /> {selectedMonth === today.slice(0, 7) ? 'Este mês' : 'Voltar para hoje'}</button>
+              <Button variant="ghost" size="icon-sm" onClick={() => setSelectedMonth((month) => addMonths(month, 1))} aria-label="Próximo mês" title="Próximo mês"><ChevronRight /></Button>
+            </div>
           </div>
 
           {loading ? (
             <div className="rounded-2xl border border-[#e4dced] bg-[#fffbff] p-12 text-center text-sm font-semibold text-[#81748a]">Carregando agenda...</div>
           ) : (
             <div className="space-y-4">
-              {days.map((date, index) => {
+              {days.map((date) => {
                 const dayAppointments = appointments.filter((item) => item.scheduledDate === date);
                 return (
                   <article
@@ -464,7 +484,7 @@ export default function Home() {
                   >
                     <div className="flex items-center justify-between border-b border-[#ede6f2] px-4 py-3.5 sm:px-5">
                       <div className="flex flex-wrap items-baseline gap-2.5">
-                        <h3 className={`font-heading text-lg font-extrabold ${index === 0 ? 'text-[#7353a6]' : ''}`}>{index === 0 ? 'Hoje' : index === 1 ? 'Amanhã' : prettyDate(date).split(',')[0]}</h3>
+                        <h3 className={`font-heading text-lg font-extrabold ${date === today ? 'text-[#7353a6]' : ''}`}>{date === today ? 'Hoje' : date === addDays(today, 1) ? 'Amanhã' : prettyDate(date).split(',')[0]}</h3>
                         <span className="text-sm font-medium capitalize text-[#81748a]">{prettyDate(date)}</span>
                       </div>
                       <span className="rounded-full bg-[#f1edf5] px-2.5 py-1 text-xs font-bold text-[#776a80]">{dayAppointments.length} {dayAppointments.length === 1 ? 'dog' : 'dogs'}</span>
@@ -687,14 +707,15 @@ export default function Home() {
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-5 sm:max-w-lg">
-          <DialogHeader><DialogTitle className="font-heading text-xl font-extrabold">Editar atendimento</DialogTitle><DialogDescription>Altere os detalhes somente desta sessão.</DialogDescription></DialogHeader>
+          <DialogHeader><DialogTitle className="font-heading text-xl font-extrabold">Editar atendimento</DialogTitle><DialogDescription>{editing?.planType === 'single' ? 'Altere os detalhes deste atendimento.' : 'Ao mudar a data, as próximas sessões do plano acompanham automaticamente.'}</DialogDescription></DialogHeader>
           {editing && <form onSubmit={saveEdit} className="space-y-5">
             <div className="grid gap-3 sm:grid-cols-2">
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Nome do dono</span><Input value={editing.ownerName} onChange={(event) => setEditing({ ...editing, ownerName: event.target.value })} className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Nome do cachorro</span><Input value={editing.dogName} onChange={(event) => setEditing({ ...editing, dogName: event.target.value })} className="h-11 bg-white" /></label>
             </div>
             <label className="block"><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><MessageCircle size={14} /> WhatsApp</span><Input type="tel" inputMode="tel" value={editing.whatsapp} onChange={(event) => setEditing({ ...editing, whatsapp: event.target.value })} placeholder="(47) 99999-9999" className="h-11 bg-white" /></label>
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Data do banho</span><Input type="date" value={editing.scheduledDate} onChange={(event) => setEditing({ ...editing, scheduledDate: event.target.value })} className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Horário</span><Input type="time" value={editing.scheduledTime} onChange={(event) => setEditing({ ...editing, scheduledTime: event.target.value })} className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Valor (opcional)</span><Input inputMode="numeric" value={formatMoney(editing.amountCents) ?? ''} onChange={(event) => setEditing({ ...editing, amountCents: realToCents(event.target.value) })} placeholder="R$ 0,00" className="h-11 bg-white font-semibold tabular-nums" /></label>
             </div>

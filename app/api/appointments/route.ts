@@ -111,10 +111,32 @@ function addDays(dateString: string, days: number) {
 async function listAppointments() {
   const results = await env.DB.prepare(
     `SELECT * FROM appointments
-     WHERE scheduled_date >= date('now', '-45 days')
      ORDER BY scheduled_date ASC, scheduled_time ASC`,
   ).all<AppointmentRow>();
   return results.results.map(mapRow);
+}
+
+function intervalForPlan(planType: string) {
+  return planType === 'monthly' ? 7 : planType === 'fortnightly' ? 14 : 0;
+}
+
+async function futureSessions(target: AppointmentRow) {
+  return env.DB.prepare(
+    'SELECT id, session_number FROM appointments WHERE group_id = ? AND session_number > ? ORDER BY session_number ASC',
+  ).bind(target.group_id, target.session_number).all<{ id: string; session_number: number }>();
+}
+
+async function rescheduleStatements(target: AppointmentRow, scheduledDate: string) {
+  const later = await futureSessions(target);
+  const intervalDays = intervalForPlan(target.plan_type);
+  return [
+    env.DB.prepare('UPDATE appointments SET scheduled_date = ? WHERE id = ?')
+      .bind(scheduledDate, target.id),
+    ...later.results.map((session) =>
+      env.DB.prepare('UPDATE appointments SET scheduled_date = ? WHERE id = ?')
+        .bind(addDays(scheduledDate, intervalDays * (session.session_number - target.session_number)), session.id),
+    ),
+  ];
 }
 
 function appointmentName(row: Pick<AppointmentRow, 'dog_name' | 'owner_name' | 'customer_pet_name'>) {
@@ -226,14 +248,14 @@ export async function POST(request: Request) {
     const target = await db.prepare('SELECT * FROM appointments WHERE id = ?')
       .bind(String(body.id ?? ''))
       .first<AppointmentRow>();
-    await db.prepare('UPDATE appointments SET scheduled_date = ? WHERE id = ?')
-      .bind(String(body.scheduledDate ?? ''), String(body.id ?? ''))
-      .run();
     if (target) {
+      const scheduledDate = String(body.scheduledDate ?? target.scheduled_date);
+      const statements = await rescheduleStatements(target, scheduledDate);
+      await db.batch(statements);
       await writeAudit(
         auth.user, 'appointment_moved', 'appointment', target.id,
-        `Moveu o atendimento de ${appointmentName(target)} de ${target.scheduled_date} para ${String(body.scheduledDate ?? '')}`,
-        { from: target.scheduled_date, to: String(body.scheduledDate ?? '') },
+        `Moveu o atendimento de ${appointmentName(target)} de ${target.scheduled_date} para ${scheduledDate}`,
+        { from: target.scheduled_date, to: scheduledDate, futureSessionsUpdated: statements.length - 1 },
       );
     }
   }
@@ -246,6 +268,8 @@ export async function POST(request: Request) {
       .bind(id)
       .first<AppointmentRow>();
     if (row) {
+      const scheduledDate = String(body.scheduledDate ?? row.scheduled_date);
+      const dateStatements = await rescheduleStatements(row, scheduledDate);
       await db.batch([
         db.prepare(
           'UPDATE appointments SET customer_pet_name = ?, owner_name = ?, dog_name = ?, whatsapp = ? WHERE group_id = ?',
@@ -264,11 +288,17 @@ export async function POST(request: Request) {
           body.amountCents === null || body.amountCents === undefined ? null : Number(body.amountCents),
           id,
         ),
+        ...dateStatements,
       ]);
       await writeAudit(
         auth.user, 'appointment_edited', 'appointment', id,
         `Editou o atendimento de ${dogName || ownerName || appointmentName(row)}`,
-        { scheduledDate: row.scheduled_date, sessionNumber: row.session_number },
+        {
+          previousDate: row.scheduled_date,
+          scheduledDate,
+          sessionNumber: row.session_number,
+          futureSessionsUpdated: dateStatements.length - 1,
+        },
       );
     }
   }
