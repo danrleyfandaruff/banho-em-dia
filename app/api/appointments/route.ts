@@ -181,7 +181,7 @@ export async function POST(request: Request) {
     const dogName = String(body.dogName ?? '');
     const whatsapp = String(body.whatsapp ?? '');
     const cpf = String(body.cpf ?? '');
-    const paymentMethod = String(body.paymentMethod ?? '');
+    const paymentMethod = body.paid ? String(body.paymentMethod ?? '') : '';
     const legacyName = [ownerName, dogName].filter(Boolean).join(' + ');
     const statements = Array.from({ length: totalSessions }, (_, index) =>
       db.prepare(
@@ -247,14 +247,17 @@ export async function POST(request: Request) {
       .bind(String(body.id ?? ''))
       .first<AppointmentRow>();
     if (row) {
-      await db.prepare('UPDATE appointments SET paid = ? WHERE group_id = ?')
-        .bind(body.paid ? 1 : 0, row.group_id)
+      const paid = Boolean(body.paid);
+      const paymentMethod = paid ? String(body.paymentMethod ?? row.payment_method ?? '') : '';
+      await db.prepare('UPDATE appointments SET paid = ?, payment_method = ? WHERE group_id = ?')
+        .bind(paid ? 1 : 0, paymentMethod, row.group_id)
         .run();
       await writeAudit(
         auth.user, 'payment_updated', 'appointment_group', row.group_id,
         `${body.paid ? 'Confirmou' : 'Desmarcou'} o pagamento ${row.plan_type === 'single' ? 'do banho avulso' : 'do plano'} de ${appointmentName(row)}`,
         {
           paid: Boolean(body.paid),
+          paymentMethod,
           amountCents: row.amount_cents,
           appliesToEntirePlan: row.plan_type !== 'single',
         },

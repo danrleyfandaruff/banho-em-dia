@@ -76,6 +76,7 @@ const planLabels: Record<PlanType, string> = { monthly: 'Mensal', fortnightly: '
 const paymentMethodLabels: Record<Exclude<PaymentMethod, ''>, string> = {
   pix: 'Pix', cash: 'Dinheiro', debit: 'Cartão de débito', credit: 'Cartão de crédito',
 };
+const paymentMethods = Object.keys(paymentMethodLabels) as Exclude<PaymentMethod, ''>[];
 const planDescriptions: Record<PlanType, string> = {
   monthly: '4 banhos · toda semana', fortnightly: '2 banhos · a cada 15 dias', single: '1 atendimento',
 };
@@ -179,6 +180,8 @@ export default function Home() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
   const [todayOpen, setTodayOpen] = useState(false);
+  const [paymentOpen, setPaymentOpen] = useState(false);
+  const [paymentTarget, setPaymentTarget] = useState<Appointment | null>(null);
   const [planReturnToToday, setPlanReturnToToday] = useState(false);
   const [selectedPlanGroupId, setSelectedPlanGroupId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
@@ -378,6 +381,40 @@ export default function Home() {
   function openPlanFromToday(item: Appointment) {
     setTodayOpen(false);
     openPlan(item, true);
+  }
+
+  function updatePaid(item: Appointment) {
+    if (item.paid) {
+      mutate(
+        { action: 'paid', id: item.id, paid: false },
+        item.planType === 'single' ? 'Banho marcado como pendente' : 'Plano marcado como pendente',
+      );
+      return;
+    }
+    setPaymentTarget(item);
+    setPaymentOpen(true);
+  }
+
+  function editPaymentMethod(item: Appointment) {
+    setPaymentTarget(item);
+    setPaymentOpen(true);
+  }
+
+  async function confirmPayment(paymentMethod: Exclude<PaymentMethod, ''>) {
+    if (!paymentTarget) return;
+    const wasPaid = paymentTarget.paid;
+    const ok = await mutate(
+      wasPaid
+        ? { action: 'payment_method', id: paymentTarget.id, paymentMethod }
+        : { action: 'paid', id: paymentTarget.id, paid: true, paymentMethod },
+      wasPaid
+        ? 'Forma de pagamento atualizada'
+        : paymentTarget.planType === 'single' ? 'Pagamento do banho confirmado' : 'Pagamento do plano confirmado',
+    );
+    if (ok) {
+      setPaymentOpen(false);
+      setPaymentTarget(null);
+    }
   }
 
   async function saveEdit(event: FormEvent) {
@@ -704,18 +741,13 @@ export default function Home() {
                                   <button
                                     disabled={saving}
                                     title={item.planType === 'single' ? 'Pagamento deste banho' : 'Pagamento único para todo o plano'}
-                                    onClick={() => mutate(
-                                      { action: 'paid', id: item.id, paid: !item.paid },
-                                      item.planType === 'single'
-                                        ? item.paid ? 'Banho marcado como pendente' : 'Pagamento do banho confirmado'
-                                        : item.paid ? 'Plano marcado como pendente' : 'Pagamento do plano confirmado',
-                                    )}
+                                    onClick={() => updatePaid(item)}
                                     className={`inline-flex items-center gap-1 text-[11px] font-bold disabled:opacity-50 ${item.paid ? 'text-[#568066]' : 'text-[#c4563c]'}`}
                                   >
                                     <CircleDollarSign size={13} /> {item.planType === 'single' ? (item.paid ? 'Pago' : 'Pendente') : (item.paid ? 'Plano pago' : 'Plano pendente')}
                                   </button>
                                   {formatMoney(item.amountCents) && <span className="text-[11px] font-semibold text-[#81748a]">{formatMoney(item.amountCents)}</span>}
-                                  {item.paymentMethod && <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#81748a]"><CreditCard size={12} /> {paymentMethodLabel(item.paymentMethod)}</span>}
+                                  {item.paymentMethod && <button type="button" disabled={saving} onClick={() => editPaymentMethod(item)} title="Alterar forma de pagamento" className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#7353a6] hover:underline disabled:opacity-50"><CreditCard size={12} /> {paymentMethodLabel(item.paymentMethod)}</button>}
                                 </div>
                                 <p className="flex flex-wrap items-center gap-x-1.5 text-sm text-[#7d7087]"><Scissors size={14} /> {item.services.length ? item.services.join(' · ') : 'Sem serviços definidos'}</p>
                                 {item.planType !== 'single' && <p className="mt-1.5 text-[11px] font-semibold text-[#92849c]">{stats.completed} concluídas · {stats.absent} faltas</p>}
@@ -772,7 +804,7 @@ export default function Home() {
             ) : (
               <div className="space-y-3 text-sm">
                 {pendingGroups.slice(0, 3).map((item) => (
-                  <button disabled={saving} key={`pending-${item.groupId}`} onClick={() => mutate({ action: 'paid', id: item.id, paid: true }, item.planType === 'single' ? 'Pagamento do banho confirmado' : 'Pagamento do plano confirmado')} className="w-full rounded-xl bg-[#f7eee9] p-3 text-left transition hover:bg-[#f2e3da] disabled:opacity-50">
+                  <button disabled={saving} key={`pending-${item.groupId}`} onClick={() => updatePaid(item)} className="w-full rounded-xl bg-[#f7eee9] p-3 text-left transition hover:bg-[#f2e3da] disabled:opacity-50">
                     <p className="font-bold">{item.dogName || item.ownerName || 'Sem nome'} · {item.planType === 'single' ? 'banho pendente' : 'plano pendente'}</p><p className="mt-1 text-xs text-[#7e7771]">{item.planType === 'single' ? 'Toque para marcar o banho como pago' : 'Toque para marcar todas as sessões como pagas'}</p>
                   </button>
                 ))}
@@ -810,7 +842,7 @@ export default function Home() {
                         {item.ownerName && <p className="text-[11px] font-semibold text-[#92849c]">Dono: {item.ownerName}</p>}
                         {item.cpf && <p className="text-[10px] font-semibold text-[#9b8ca5]">CPF: {item.cpf}</p>}
                         <p className="mt-1 text-xs text-[#81748a]">{planLabels[item.planType]} · sessão {item.sessionNumber} de {item.totalSessions}</p>
-                        {item.paymentMethod && <p className="mt-1 flex items-center gap-1 text-[11px] font-semibold text-[#81748a]"><CreditCard size={12} /> {paymentMethodLabel(item.paymentMethod)}</p>}
+                        {item.paymentMethod && <button type="button" disabled={saving} onClick={() => editPaymentMethod(item)} className="mt-1 flex items-center gap-1 text-[11px] font-semibold text-[#7353a6] hover:underline disabled:opacity-50"><CreditCard size={12} /> {paymentMethodLabel(item.paymentMethod)}</button>}
                       </div>
                     </div>
                     <span className={`rounded-full px-2.5 py-1 text-[11px] font-extrabold ${item.status === 'completed' ? 'bg-[#e8f4eb] text-[#4f765c]' : item.status === 'absent' ? 'bg-[#f7e7e2] text-[#ad533d]' : 'bg-[#f1edf5] text-[#776a80]'}`}>{statusLabels[item.status]}</span>
@@ -863,7 +895,7 @@ export default function Home() {
                   <span className="rounded-full bg-[#eee6f7] px-2.5 py-1 text-xs font-extrabold text-[#7353a6]">Plano {planLabels[selectedPlanHead.planType]}</span>
                   <span className={`rounded-full px-2.5 py-1 text-xs font-extrabold ${selectedPlanHead.paid ? 'bg-[#e8f4eb] text-[#4f765c]' : 'bg-[#f7e7e2] text-[#ad533d]'}`}>{selectedPlanHead.paid ? 'Plano pago' : 'Plano pendente'}</span>
                   {formatMoney(selectedPlanHead.amountCents) && <span className="text-xs font-bold text-[#6f6179]">{formatMoney(selectedPlanHead.amountCents)}</span>}
-                  {selectedPlanHead.paymentMethod && <span className="inline-flex items-center gap-1 text-xs font-bold text-[#6f6179]"><CreditCard size={13} /> {paymentMethodLabel(selectedPlanHead.paymentMethod)}</span>}
+                  {selectedPlanHead.paymentMethod && <button type="button" disabled={saving} onClick={() => editPaymentMethod(selectedPlanHead)} title="Alterar forma de pagamento" className="inline-flex items-center gap-1 text-xs font-bold text-[#7353a6] hover:underline disabled:opacity-50"><CreditCard size={13} /> {paymentMethodLabel(selectedPlanHead.paymentMethod)}</button>}
                 </div>
                 <div className="flex items-center gap-2 text-[11px] font-bold text-[#81748a]">
                   <span>{selectedPlanStats.completed} concluídos</span><span>·</span><span>{selectedPlanStats.absent} faltas</span><span>·</span><span>{selectedPlanStats.scheduled} abertos</span>
@@ -874,33 +906,11 @@ export default function Home() {
                 <Button
                   disabled={saving}
                   variant="outline"
-                  onClick={() => mutate(
-                    { action: 'paid', id: selectedPlanHead.id, paid: !selectedPlanHead.paid },
-                    selectedPlanHead.paid ? 'Plano marcado como pendente' : 'Pagamento do plano confirmado',
-                  )}
+                  onClick={() => updatePaid(selectedPlanHead)}
                   className={selectedPlanHead.paid ? 'font-bold text-[#568066]' : 'font-bold text-[#c4563c]'}
                 >
                   <CircleDollarSign /> {selectedPlanHead.paid ? 'Marcar pendente' : 'Marcar plano pago'}
                 </Button>
-                <label className="flex items-center gap-2 rounded-lg border border-[#ded5e6] bg-white px-2.5">
-                  <CreditCard size={15} className="text-[#7353a6]" />
-                  <span className="sr-only">Forma de pagamento</span>
-                  <select
-                    disabled={saving}
-                    value={selectedPlanHead.paymentMethod}
-                    onChange={(event) => mutate(
-                      { action: 'payment_method', id: selectedPlanHead.id, paymentMethod: event.target.value },
-                      'Forma de pagamento atualizada',
-                    )}
-                    className="h-9 bg-transparent text-xs font-bold outline-none disabled:opacity-50"
-                  >
-                    <option value="">Forma de pagamento</option>
-                    <option value="pix">Pix</option>
-                    <option value="cash">Dinheiro</option>
-                    <option value="debit">Cartão de débito</option>
-                    <option value="credit">Cartão de crédito</option>
-                  </select>
-                </label>
                 <Button disabled={saving} variant="outline" onClick={deleteFromPlan} className="border-[#ead0cc] font-bold text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f]"><Trash2 /> Apagar plano</Button>
               </div>
             </div>
@@ -975,6 +985,35 @@ export default function Home() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={paymentOpen} onOpenChange={(open) => {
+        setPaymentOpen(open);
+        if (!open) setPaymentTarget(null);
+      }}>
+        <DialogContent className="border-0 bg-[#fffbff] p-5 sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><CircleDollarSign className="text-[#7353a6]" /> {paymentTarget?.paid ? 'Alterar forma de pagamento' : 'Confirmar pagamento'}</DialogTitle>
+            <DialogDescription>
+              {paymentTarget?.planType === 'single' ? 'Como este banho foi pago?' : `Como o plano de ${paymentTarget?.dogName || paymentTarget?.ownerName || 'cliente sem nome'} foi pago?`}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {paymentMethods.map((method) => (
+              <Button
+                key={method}
+                type="button"
+                variant="outline"
+                disabled={saving}
+                onClick={() => confirmPayment(method)}
+                className={`h-12 justify-start font-bold ${paymentTarget?.paymentMethod === method ? 'border-[#7353a6] bg-[#eee6f7] text-[#7353a6]' : 'border-[#dfd5e8] bg-white'}`}
+              >
+                {saving ? <LoaderCircle className="animate-spin" /> : <CreditCard />} {paymentMethodLabels[method]}
+              </Button>
+            ))}
+          </div>
+          <DialogFooter className="-mx-5 -mb-5 px-5"><Button type="button" variant="outline" disabled={saving} onClick={() => setPaymentOpen(false)}>Cancelar</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={newOpen} onOpenChange={setNewOpen}>
         <DialogContent className="max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-5 sm:max-w-xl">
           <DialogHeader>
@@ -989,7 +1028,6 @@ export default function Home() {
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><IdCard size={14} /> CPF (opcional)</span><Input inputMode="numeric" value={form.cpf} onChange={(event) => setForm({ ...form, cpf: maskCpf(event.target.value) })} placeholder="000.000.000-00" className="h-11 bg-white" /></label>
-              <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><CreditCard size={14} /> Forma de pagamento (opcional)</span><select value={form.paymentMethod} onChange={(event) => setForm({ ...form, paymentMethod: event.target.value as PaymentMethod })} className="h-11 w-full rounded-md border border-input bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#7353a6]/30"><option value="">Não informado</option><option value="pix">Pix</option><option value="cash">Dinheiro</option><option value="debit">Cartão de débito</option><option value="credit">Cartão de crédito</option></select></label>
             </div>
             <div>
               <span className="mb-2 block text-xs font-bold text-[#6f6179]">Tipo de plano</span>
@@ -1065,7 +1103,12 @@ export default function Home() {
                 })}
               </div>
             </div>
-            <label className="flex cursor-pointer items-center justify-between rounded-xl border border-[#e4dced] bg-white p-3.5"><span><strong className="block text-sm">{form.planType === 'single' ? 'O banho já está pago?' : 'O plano já está pago?'}</strong><small className="text-xs text-[#85768f]">{form.planType === 'single' ? 'Você pode mudar isso depois' : `Pagamento único para todas as ${totalSessionsFor(form.planType)} sessões`}</small></span><Switch checked={form.paid} onCheckedChange={(checked) => setForm({ ...form, paid: checked })} /></label>
+            <div className="rounded-xl border border-[#e4dced] bg-white p-3.5">
+              <label className="flex cursor-pointer items-center justify-between"><span><strong className="block text-sm">{form.planType === 'single' ? 'O banho já está pago?' : 'O plano já está pago?'}</strong><small className="text-xs text-[#85768f]">{form.planType === 'single' ? 'Você pode mudar isso depois' : `Pagamento único para todas as ${totalSessionsFor(form.planType)} sessões`}</small></span><Switch checked={form.paid} onCheckedChange={(checked) => setForm({ ...form, paid: checked, paymentMethod: checked ? form.paymentMethod : '' })} /></label>
+              {form.paid && (
+                <label className="mt-3 block border-t border-[#eee8f3] pt-3"><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><CreditCard size={14} /> Como foi pago?</span><select required value={form.paymentMethod} onChange={(event) => setForm({ ...form, paymentMethod: event.target.value as PaymentMethod })} className="h-11 w-full rounded-md border border-input bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#7353a6]/30"><option value="">Escolha a forma de pagamento</option><option value="pix">Pix</option><option value="cash">Dinheiro</option><option value="debit">Cartão de débito</option><option value="credit">Cartão de crédito</option></select></label>
+              )}
+            </div>
             <DialogFooter className="-mx-5 -mb-5 px-5">
               <Button type="button" variant="outline" onClick={() => setNewOpen(false)}>Cancelar</Button>
               <Button type="submit" disabled={saving} className="bg-[#9b6bc2] font-bold text-white hover:bg-[#8254a8]">{saving ? <LoaderCircle className="animate-spin" /> : <Sparkles />} {saving ? 'Salvando...' : 'Criar agendamento'}</Button>
@@ -1086,7 +1129,6 @@ export default function Home() {
               <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><MessageCircle size={14} /> WhatsApp</span><Input type="tel" inputMode="tel" value={editing.whatsapp} onChange={(event) => setEditing({ ...editing, whatsapp: event.target.value })} placeholder="(47) 99999-9999" className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><IdCard size={14} /> CPF (opcional)</span><Input inputMode="numeric" value={editing.cpf} onChange={(event) => setEditing({ ...editing, cpf: maskCpf(event.target.value) })} placeholder="000.000.000-00" className="h-11 bg-white" /></label>
             </div>
-            <label className="block"><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><CreditCard size={14} /> Forma de pagamento (opcional)</span><select value={editing.paymentMethod} onChange={(event) => setEditing({ ...editing, paymentMethod: event.target.value as PaymentMethod })} className="h-11 w-full rounded-md border border-input bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#7353a6]/30"><option value="">Não informado</option><option value="pix">Pix</option><option value="cash">Dinheiro</option><option value="debit">Cartão de débito</option><option value="credit">Cartão de crédito</option></select></label>
             <div className="grid gap-3 sm:grid-cols-3">
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Data do banho</span><Input type="date" value={editing.scheduledDate} onChange={(event) => setEditing({ ...editing, scheduledDate: event.target.value })} className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Horário</span><Input type="time" value={editing.scheduledTime} onChange={(event) => setEditing({ ...editing, scheduledTime: event.target.value })} className="h-11 bg-white" /></label>
