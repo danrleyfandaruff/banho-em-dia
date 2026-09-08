@@ -1,9 +1,9 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { DragEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight, CircleDollarSign,
-  Clock3, PawPrint, Pencil, Plus, RefreshCw, Scissors, Sparkles, UserRound, X,
+  Clock3, GripVertical, PawPrint, Pencil, Plus, RefreshCw, Scissors, Sparkles, UserRound, X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -71,6 +71,8 @@ export default function Home() {
   const [editing, setEditing] = useState<Appointment | null>(null);
   const [daysShown, setDaysShown] = useState(14);
   const [notice, setNotice] = useState('');
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
   const today = localDateString();
 
   useEffect(() => {
@@ -156,6 +158,31 @@ export default function Home() {
     if (ok) setEditOpen(false);
   }
 
+  function startDragging(event: DragEvent<HTMLButtonElement>, item: Appointment) {
+    setDraggingId(item.id);
+    setDropTarget(item.scheduledDate);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', item.id);
+    const card = event.currentTarget.closest('[data-appointment-card]');
+    if (card instanceof HTMLElement) event.dataTransfer.setDragImage(card, 22, 22);
+  }
+
+  async function dropOnDay(event: DragEvent<HTMLElement>, scheduledDate: string) {
+    event.preventDefault();
+    const id = draggingId || event.dataTransfer.getData('text/plain');
+    setDraggingId(null);
+    setDropTarget(null);
+    const item = appointments.find((appointment) => appointment.id === id);
+    if (!item || item.scheduledDate === scheduledDate) return;
+
+    const previous = appointments;
+    setAppointments((current) => current.map((appointment) =>
+      appointment.id === id ? { ...appointment, scheduledDate } : appointment,
+    ));
+    const ok = await mutate({ action: 'move', id, scheduledDate }, `Movido para ${prettyDate(scheduledDate)}`);
+    if (!ok) setAppointments(previous);
+  }
+
   return (
     <main className="min-h-screen bg-[#f5f3ee] text-[#202420]">
       <header className="sticky top-0 z-20 border-b border-[#dfe2dc] bg-[#fbfaf7]/95 backdrop-blur">
@@ -185,6 +212,7 @@ export default function Home() {
             <div>
               <p className="mb-1 text-sm font-semibold capitalize text-[#728078]">Agenda de {new Intl.DateTimeFormat('pt-BR', { month: 'long' }).format(new Date())}</p>
               <h2 className="font-heading text-[30px] font-extrabold tracking-[-0.045em] sm:text-[34px]">Próximos banhos</h2>
+              <p className="mt-1 hidden text-xs font-semibold text-[#899189] sm:block">Arraste pelo ícone <GripVertical className="inline" size={14} /> para trocar o dia</p>
             </div>
             <Button variant="outline" onClick={() => setDaysShown((value) => value === 14 ? 30 : 14)} className="h-10 bg-white px-3.5 font-semibold text-[#4a554d] shadow-sm">
               <CalendarDays /> {daysShown === 14 ? 'Ver 30 dias' : 'Ver 14 dias'}
@@ -198,7 +226,21 @@ export default function Home() {
               {days.map((date, index) => {
                 const dayAppointments = appointments.filter((item) => item.scheduledDate === date);
                 return (
-                  <article key={date} className="overflow-hidden rounded-2xl border border-[#dfe2dc] bg-[#fbfaf7] shadow-[0_2px_10px_rgba(40,55,46,0.04)]">
+                  <article
+                    key={date}
+                    onDragOver={(event) => {
+                      if (!draggingId) return;
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = 'move';
+                      setDropTarget(date);
+                    }}
+                    onDrop={(event) => dropOnDay(event, date)}
+                    className={`overflow-hidden rounded-2xl border bg-[#fbfaf7] shadow-[0_2px_10px_rgba(40,55,46,0.04)] transition-all ${
+                      draggingId && dropTarget === date
+                        ? 'border-[#4d806e] bg-[#edf5f0] ring-2 ring-[#4d806e]/25'
+                        : 'border-[#dfe2dc]'
+                    }`}
+                  >
                     <div className="flex items-center justify-between border-b border-[#e5e6e1] px-4 py-3.5 sm:px-5">
                       <div className="flex flex-wrap items-baseline gap-2.5">
                         <h3 className={`font-heading text-lg font-extrabold ${index === 0 ? 'text-[#275848]' : ''}`}>{index === 0 ? 'Hoje' : index === 1 ? 'Amanhã' : prettyDate(date).split(',')[0]}</h3>
@@ -213,7 +255,22 @@ export default function Home() {
                           const stats = groupStats.get(item.groupId) ?? { completed: 0, absent: 0 };
                           const isRenewable = item.sessionNumber === item.totalSessions && item.status === 'completed';
                           return (
-                            <div key={item.id} className={`grid gap-4 px-4 py-4 transition hover:bg-white sm:grid-cols-[62px_minmax(0,1fr)_auto] sm:items-center sm:px-5 ${item.status !== 'scheduled' ? 'bg-[#f7f7f3]' : ''}`}>
+                            <div
+                              key={item.id}
+                              data-appointment-card
+                              className={`relative grid gap-4 py-4 pr-4 pl-10 transition hover:bg-white sm:grid-cols-[62px_minmax(0,1fr)_auto] sm:items-center sm:pr-5 sm:pl-11 ${item.status !== 'scheduled' ? 'bg-[#f7f7f3]' : ''} ${draggingId === item.id ? 'opacity-45' : ''}`}
+                            >
+                              <button
+                                type="button"
+                                draggable
+                                onDragStart={(event) => startDragging(event, item)}
+                                onDragEnd={() => { setDraggingId(null); setDropTarget(null); }}
+                                aria-label={`Arrastar ${item.customerPetName || 'agendamento'} para outro dia`}
+                                title="Arraste para outro dia"
+                                className="absolute left-1.5 top-1/2 grid h-10 w-7 -translate-y-1/2 cursor-grab place-items-center rounded-lg text-[#9aa29c] transition hover:bg-[#e7ebe6] hover:text-[#275848] active:cursor-grabbing"
+                              >
+                                <GripVertical size={18} />
+                              </button>
                               <div className="flex items-center gap-2 font-heading text-sm font-extrabold text-[#566158] sm:block">
                                 <Clock3 className="sm:hidden" size={15} /> {item.scheduledTime}
                               </div>
@@ -252,7 +309,7 @@ export default function Home() {
                       </div>
                     ) : (
                       <button onClick={() => openNew(date)} className="flex w-full items-center gap-3 px-5 py-4 text-left text-sm font-semibold text-[#7c867f] transition hover:bg-white">
-                        <span className="grid h-8 w-8 place-items-center rounded-lg border border-dashed border-[#b9c1ba]"><Plus size={16} /></span>Adicionar dog neste dia
+                        <span className="grid h-8 w-8 place-items-center rounded-lg border border-dashed border-[#b9c1ba]">{draggingId && dropTarget === date ? <Check size={16} /> : <Plus size={16} />}</span>{draggingId && dropTarget === date ? 'Solte aqui para mudar o dia' : 'Adicionar dog neste dia'}
                       </button>
                     )}
                   </article>
