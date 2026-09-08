@@ -344,32 +344,38 @@ export async function POST(request: Request) {
     ).bind(String(body.groupId ?? '')).all<AppointmentRow>();
     const previousSessions = previousPlan.results;
     const previous = previousSessions.at(-1);
-    if (previous) {
-      const totalSessions = previous.plan_type === 'monthly' ? 4 : previous.plan_type === 'fortnightly' ? 2 : 1;
-      const intervalDays = previous.plan_type === 'monthly' ? 7 : previous.plan_type === 'fortnightly' ? 14 : 0;
-      const nextStart = addDays(previous.scheduled_date, intervalDays || 7);
-      const groupId = crypto.randomUUID();
-      const createdAt = new Date().toISOString();
-      await db.batch(Array.from({ length: totalSessions }, (_, index) =>
-        db.prepare(
-          `INSERT INTO appointments (
-            id, group_id, customer_pet_name, owner_name, dog_name, whatsapp, plan_type, amount_cents, paid,
-            scheduled_date, scheduled_time, status, services, session_number,
-            total_sessions, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 'scheduled', ?, ?, ?, ?)`,
-        ).bind(
-          crypto.randomUUID(), groupId, previous.customer_pet_name, previous.owner_name, previous.dog_name,
-          previous.whatsapp, previous.plan_type,
-          previous.amount_cents, addDays(nextStart, intervalDays * index), previous.scheduled_time,
-          previousSessions[index]?.services ?? previous.services, index + 1, totalSessions, createdAt,
-        ),
-      ));
-      await writeAudit(
-        auth.user, 'plan_renewed', 'appointment_group', groupId,
-        `Renovou o plano de ${appointmentName(previous)}`,
-        { previousGroupId: previous.group_id, planType: previous.plan_type, totalSessions },
-      );
+    if (!previous) return Response.json({ error: 'not_found' }, { status: 404 });
+    if (previous.plan_type === 'single') {
+      return Response.json({ error: 'single_cannot_renew' }, { status: 409 });
     }
+    const pendingCount = previousSessions.filter((session) => session.status === 'scheduled').length;
+    if (pendingCount) {
+      return Response.json({ error: 'plan_incomplete', pendingCount }, { status: 409 });
+    }
+    const totalSessions = previous.plan_type === 'monthly' ? 4 : 2;
+    const intervalDays = previous.plan_type === 'monthly' ? 7 : 14;
+    const nextStart = addDays(previous.scheduled_date, intervalDays);
+    const groupId = crypto.randomUUID();
+    const createdAt = new Date().toISOString();
+    await db.batch(Array.from({ length: totalSessions }, (_, index) =>
+      db.prepare(
+        `INSERT INTO appointments (
+          id, group_id, customer_pet_name, owner_name, dog_name, whatsapp, plan_type, amount_cents, paid,
+          scheduled_date, scheduled_time, status, services, session_number,
+          total_sessions, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 'scheduled', ?, ?, ?, ?)`,
+      ).bind(
+        crypto.randomUUID(), groupId, previous.customer_pet_name, previous.owner_name, previous.dog_name,
+        previous.whatsapp, previous.plan_type,
+        previous.amount_cents, addDays(nextStart, intervalDays * index), previous.scheduled_time,
+        previousSessions[index]?.services ?? previous.services, index + 1, totalSessions, createdAt,
+      ),
+    ));
+    await writeAudit(
+      auth.user, 'plan_renewed', 'appointment_group', groupId,
+      `Renovou o plano de ${appointmentName(previous)}`,
+      { previousGroupId: previous.group_id, planType: previous.plan_type, totalSessions },
+    );
   }
 
   await db.prepare('PRAGMA optimize').run();

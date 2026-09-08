@@ -197,11 +197,12 @@ export default function Home() {
 
   const days = useMemo(() => daysInMonth(selectedMonth), [selectedMonth]);
   const groupStats = useMemo(() => {
-    const stats = new Map<string, { completed: number; absent: number }>();
+    const stats = new Map<string, { completed: number; absent: number; scheduled: number }>();
     appointments.forEach((item) => {
-      const current = stats.get(item.groupId) ?? { completed: 0, absent: 0 };
+      const current = stats.get(item.groupId) ?? { completed: 0, absent: 0, scheduled: 0 };
       if (item.status === 'completed') current.completed += 1;
       if (item.status === 'absent') current.absent += 1;
+      if (item.status === 'scheduled') current.scheduled += 1;
       stats.set(item.groupId, current);
     });
     return stats;
@@ -209,7 +210,12 @@ export default function Home() {
 
   const todayAppointments = appointments.filter((item) => item.scheduledDate === today);
   const pendingGroups = Array.from(new Map(appointments.filter((item) => !item.paid).map((item) => [item.groupId, item])).values());
-  const renewalItems = appointments.filter((item) => item.sessionNumber === item.totalSessions && item.status === 'completed');
+  const renewalItems = appointments.filter((item) =>
+    item.planType !== 'single'
+    && item.sessionNumber === item.totalSessions
+    && item.status === 'completed'
+    && (groupStats.get(item.groupId)?.scheduled ?? 0) === 0,
+  );
   const editingPlan = editing ? appointments.filter((item) => item.groupId === editing.groupId) : [];
   const completedToDelete = editingPlan.filter((item) => item.status === 'completed').length;
   const deleteBlockers = [
@@ -239,7 +245,9 @@ export default function Home() {
       if (!response.ok) {
         const blockerMessage = Array.isArray(data.blockers)
           ? `Não é possível apagar: ${data.blockers.join(' e ')}.`
-          : 'Não foi possível salvar. Tente novamente.';
+          : data.error === 'plan_incomplete'
+            ? `Ainda ${data.pendingCount === 1 ? 'existe 1 banho em aberto' : `existem ${data.pendingCount} banhos em aberto`}. Finalize todas as sessões antes de renovar.`
+            : 'Não foi possível salvar. Tente novamente.';
         setNotice(blockerMessage);
         window.setTimeout(() => setNotice(''), 4200);
         return false;
@@ -291,6 +299,11 @@ export default function Home() {
   function openEdit(item: Appointment) {
     setEditing({ ...item });
     setEditOpen(true);
+  }
+
+  function openDelete(item: Appointment) {
+    setEditing({ ...item });
+    setDeleteOpen(true);
   }
 
   async function saveEdit(event: FormEvent) {
@@ -544,8 +557,11 @@ export default function Home() {
                     {dayAppointments.length ? (
                       <div className="divide-y divide-[#eee8f3]">
                         {dayAppointments.map((item) => {
-                          const stats = groupStats.get(item.groupId) ?? { completed: 0, absent: 0 };
-                          const isRenewable = item.sessionNumber === item.totalSessions && item.status === 'completed';
+                          const stats = groupStats.get(item.groupId) ?? { completed: 0, absent: 0, scheduled: 0 };
+                          const isRenewable = item.planType !== 'single'
+                            && item.sessionNumber === item.totalSessions
+                            && item.status === 'completed'
+                            && stats.scheduled === 0;
                           return (
                             <div
                               key={item.id}
@@ -610,6 +626,7 @@ export default function Home() {
                               <div className="flex flex-wrap items-center gap-1.5 sm:justify-end">
                                 <Button disabled={saving} aria-label="Mover para o dia anterior" title="Mover para o dia anterior" variant="ghost" size="icon-sm" onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, -1) }, 'Movido para o dia anterior')}><ChevronLeft /></Button>
                                 <Button disabled={saving} aria-label="Mover para o próximo dia" title="Mover para o próximo dia" variant="ghost" size="icon-sm" onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, 1) }, 'Movido para o próximo dia')}><ChevronRight /></Button>
+                                <Button disabled={saving} variant="outline" onClick={() => openDelete(item)} className="h-9 border-[#ead0cc] px-2.5 text-xs font-bold text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f]"><Trash2 /> {item.planType === 'single' ? 'Apagar banho' : 'Apagar plano'}</Button>
                                 {isRenewable ? (
                                   <Button disabled={saving} onClick={() => mutate({ action: 'renew', groupId: item.groupId }, 'Plano renovado mantendo o mesmo dia')} className="h-9 bg-[#9b6bc2] px-3 text-xs font-bold text-white hover:bg-[#8254a8]"><RefreshCw /> Renovar</Button>
                                 ) : item.status === 'scheduled' ? (
