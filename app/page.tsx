@@ -3,7 +3,8 @@
 import { DragEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight, CircleDollarSign,
-  Clock3, GripVertical, PawPrint, Pencil, Plus, RefreshCw, Scissors, Sparkles, UserRound, X,
+  Clock3, Dog, GripVertical, MessageCircle, PawPrint, Pencil, Plus, RefreshCw,
+  Scissors, Sparkles, UserRound, X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -18,6 +19,9 @@ type Appointment = {
   id: string;
   groupId: string;
   customerPetName: string;
+  ownerName: string;
+  dogName: string;
+  whatsapp: string;
   planType: PlanType;
   amountCents: number | null;
   paid: boolean;
@@ -81,8 +85,15 @@ function formatMoney(cents: number | null) {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(cents / 100);
 }
 
+function whatsappUrl(value: string) {
+  const digits = value.replace(/\D/g, '');
+  if (!digits) return '';
+  const internationalNumber = digits.length <= 11 ? `55${digits}` : digits;
+  return `https://wa.me/${internationalNumber}`;
+}
+
 const emptyForm = () => ({
-  customerPetName: '', planType: 'monthly' as PlanType, amount: '', paid: false,
+  ownerName: '', dogName: '', whatsapp: '', planType: 'monthly' as PlanType, amount: '', paid: false,
   scheduledDate: localDateString(), scheduledTime: '09:00',
   sessionServices: Array.from({ length: 4 }, () => ['Banho']),
 });
@@ -187,7 +198,8 @@ export default function Home() {
     event.preventDefault();
     if (!editing) return;
     const ok = await mutate({
-      action: 'edit', id: editing.id, customerPetName: editing.customerPetName,
+      action: 'edit', id: editing.id, ownerName: editing.ownerName, dogName: editing.dogName,
+      whatsapp: editing.whatsapp,
       scheduledTime: editing.scheduledTime, services: editing.services, amountCents: editing.amountCents,
     }, 'Atendimento atualizado');
     if (ok) setEditOpen(false);
@@ -300,7 +312,7 @@ export default function Home() {
                                 draggable
                                 onDragStart={(event) => startDragging(event, item)}
                                 onDragEnd={() => { setDraggingId(null); setDropTarget(null); }}
-                                aria-label={`Arrastar ${item.customerPetName || 'agendamento'} para outro dia`}
+                                aria-label={`Arrastar ${item.dogName || item.ownerName || 'agendamento'} para outro dia`}
                                 title="Arraste para outro dia"
                                 className="absolute left-1.5 top-1/2 grid h-10 w-7 -translate-y-1/2 cursor-grab place-items-center rounded-lg text-[#9b8ca5] transition hover:bg-[#eee7f5] hover:text-[#7353a6] active:cursor-grabbing"
                               >
@@ -311,10 +323,25 @@ export default function Home() {
                               </div>
                               <div>
                                 <div className="mb-1.5 flex flex-wrap items-center gap-2">
-                                  <button onClick={() => openEdit(item)} className="group/name flex items-center gap-1.5 text-left">
-                                    <h4 className="font-heading text-base font-extrabold tracking-[-0.02em]">{item.customerPetName || 'Sem nome'}</h4>
-                                    <Pencil size={12} className="text-[#9b8ca5] opacity-0 transition group-hover/name:opacity-100" />
-                                  </button>
+                                  <div className="mr-1">
+                                    <button onClick={() => openEdit(item)} className="group/name flex items-center gap-1.5 text-left">
+                                      <h4 className="font-heading text-base font-extrabold tracking-[-0.02em]">{item.dogName || 'Cachorro sem nome'}</h4>
+                                      <Pencil size={12} className="text-[#9b8ca5] opacity-0 transition group-hover/name:opacity-100" />
+                                    </button>
+                                    {item.ownerName && <p className="text-[11px] font-semibold text-[#92849c]">Dono: {item.ownerName}</p>}
+                                  </div>
+                                  {item.whatsapp && (
+                                    <a
+                                      href={whatsappUrl(item.whatsapp)}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      aria-label={`Abrir WhatsApp de ${item.ownerName || item.dogName || 'cliente'}`}
+                                      title={`WhatsApp: ${item.whatsapp}`}
+                                      className="grid h-8 w-8 place-items-center rounded-full bg-[#e6f7eb] text-[#1e8b4c] transition hover:bg-[#d5f0de]"
+                                    >
+                                      <MessageCircle size={17} />
+                                    </a>
+                                  )}
                                   <span className="rounded-full bg-[#eee6f7] px-2 py-0.5 text-[11px] font-bold text-[#7353a6]">{planLabels[item.planType]} · {item.sessionNumber} de {item.totalSessions}</span>
                                   <button onClick={() => mutate({ action: 'paid', id: item.id, paid: !item.paid }, item.paid ? 'Marcado como pendente' : 'Pagamento confirmado')} className={`inline-flex items-center gap-1 text-[11px] font-bold ${item.paid ? 'text-[#568066]' : 'text-[#c4563c]'}`}>
                                     <CircleDollarSign size={13} /> {item.paid ? 'Pago' : 'Pendente'}
@@ -375,12 +402,12 @@ export default function Home() {
               <div className="space-y-3 text-sm">
                 {pendingGroups.slice(0, 3).map((item) => (
                   <button key={`pending-${item.groupId}`} onClick={() => mutate({ action: 'paid', id: item.id, paid: true }, 'Pagamento confirmado')} className="w-full rounded-xl bg-[#f7eee9] p-3 text-left transition hover:bg-[#f2e3da]">
-                    <p className="font-bold">{item.customerPetName || 'Sem nome'} · pendente</p><p className="mt-1 text-xs text-[#7e7771]">Toque para marcar como pago</p>
+                    <p className="font-bold">{item.dogName || item.ownerName || 'Sem nome'} · pendente</p><p className="mt-1 text-xs text-[#7e7771]">Toque para marcar como pago</p>
                   </button>
                 ))}
                 {renewalItems.slice(0, 3).map((item) => (
                   <button key={`renew-${item.id}`} onClick={() => mutate({ action: 'renew', groupId: item.groupId }, 'Plano renovado mantendo o mesmo dia')} className="w-full rounded-xl bg-[#f1ecf7] p-3 text-left transition hover:bg-[#e9e0f3]">
-                    <p className="font-bold">{item.customerPetName || 'Sem nome'} · última sessão</p><p className="mt-1 text-xs font-extrabold text-[#7353a6]">Renovar plano →</p>
+                    <p className="font-bold">{item.dogName || item.ownerName || 'Sem nome'} · última sessão</p><p className="mt-1 text-xs font-extrabold text-[#7353a6]">Renovar plano →</p>
                   </button>
                 ))}
               </div>
@@ -396,7 +423,11 @@ export default function Home() {
             <DialogDescription>Cadastre o plano e o primeiro banho. Os próximos entram sozinhos no mesmo dia da semana.</DialogDescription>
           </DialogHeader>
           <form onSubmit={createAppointment} className="space-y-5">
-            <label className="block"><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><UserRound size={14} /> Cliente + cachorro</span><Input autoFocus value={form.customerPetName} onChange={(event) => setForm({ ...form, customerPetName: event.target.value })} placeholder="Ex.: Ana + Bob" className="h-11 bg-white" /></label>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><UserRound size={14} /> Nome do dono</span><Input autoFocus value={form.ownerName} onChange={(event) => setForm({ ...form, ownerName: event.target.value })} placeholder="Ex.: Ana" className="h-11 bg-white" /></label>
+              <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><Dog size={14} /> Nome do cachorro</span><Input value={form.dogName} onChange={(event) => setForm({ ...form, dogName: event.target.value })} placeholder="Ex.: Bob" className="h-11 bg-white" /></label>
+              <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><MessageCircle size={14} /> WhatsApp</span><Input type="tel" inputMode="tel" value={form.whatsapp} onChange={(event) => setForm({ ...form, whatsapp: event.target.value })} placeholder="(47) 99999-9999" className="h-11 bg-white" /></label>
+            </div>
             <div>
               <span className="mb-2 block text-xs font-bold text-[#6f6179]">Tipo de plano</span>
               <div className="grid gap-2 sm:grid-cols-3">
@@ -484,7 +515,11 @@ export default function Home() {
         <DialogContent className="max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-5 sm:max-w-lg">
           <DialogHeader><DialogTitle className="font-heading text-xl font-extrabold">Editar atendimento</DialogTitle><DialogDescription>Altere os detalhes somente desta sessão.</DialogDescription></DialogHeader>
           {editing && <form onSubmit={saveEdit} className="space-y-5">
-            <label className="block"><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Cliente + cachorro</span><Input value={editing.customerPetName} onChange={(event) => setEditing({ ...editing, customerPetName: event.target.value })} className="h-11 bg-white" /></label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Nome do dono</span><Input value={editing.ownerName} onChange={(event) => setEditing({ ...editing, ownerName: event.target.value })} className="h-11 bg-white" /></label>
+              <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Nome do cachorro</span><Input value={editing.dogName} onChange={(event) => setEditing({ ...editing, dogName: event.target.value })} className="h-11 bg-white" /></label>
+            </div>
+            <label className="block"><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><MessageCircle size={14} /> WhatsApp</span><Input type="tel" inputMode="tel" value={editing.whatsapp} onChange={(event) => setEditing({ ...editing, whatsapp: event.target.value })} placeholder="(47) 99999-9999" className="h-11 bg-white" /></label>
             <div className="grid gap-3 sm:grid-cols-2">
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Horário</span><Input type="time" value={editing.scheduledTime} onChange={(event) => setEditing({ ...editing, scheduledTime: event.target.value })} className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Valor (opcional)</span><Input inputMode="decimal" value={editing.amountCents === null ? '' : String(editing.amountCents / 100).replace('.', ',')} onChange={(event) => setEditing({ ...editing, amountCents: event.target.value ? Math.round(Number(event.target.value.replace(',', '.')) * 100) : null })} className="h-11 bg-white" /></label>

@@ -4,6 +4,9 @@ type AppointmentRow = {
   id: string;
   group_id: string;
   customer_pet_name: string;
+  owner_name: string;
+  dog_name: string;
+  whatsapp: string;
   plan_type: string;
   amount_cents: number | null;
   paid: number;
@@ -20,6 +23,9 @@ type Appointment = {
   id: string;
   groupId: string;
   customerPetName: string;
+  ownerName: string;
+  dogName: string;
+  whatsapp: string;
   planType: 'monthly' | 'fortnightly' | 'single';
   amountCents: number | null;
   paid: boolean;
@@ -38,10 +44,16 @@ function mapRow(row: AppointmentRow): Appointment {
   } catch {
     services = [];
   }
+  const legacyNames = row.customer_pet_name.split(/\s*\+\s*/);
+  const ownerName = row.owner_name || (legacyNames.length > 1 ? legacyNames[0] : '');
+  const dogName = row.dog_name || (legacyNames.length > 1 ? legacyNames.slice(1).join(' + ') : row.customer_pet_name);
   return {
     id: row.id,
     groupId: row.group_id,
     customerPetName: row.customer_pet_name,
+    ownerName,
+    dogName,
+    whatsapp: row.whatsapp || '',
     planType: row.plan_type as Appointment['planType'],
     amountCents: row.amount_cents,
     paid: Boolean(row.paid),
@@ -61,6 +73,9 @@ async function ensureSchema() {
       id TEXT PRIMARY KEY,
       group_id TEXT NOT NULL,
       customer_pet_name TEXT NOT NULL DEFAULT '',
+      owner_name TEXT NOT NULL DEFAULT '',
+      dog_name TEXT NOT NULL DEFAULT '',
+      whatsapp TEXT NOT NULL DEFAULT '',
       plan_type TEXT NOT NULL,
       amount_cents INTEGER,
       paid INTEGER NOT NULL DEFAULT 0,
@@ -76,6 +91,14 @@ async function ensureSchema() {
     db.prepare('CREATE INDEX IF NOT EXISTS idx_appointments_group_id ON appointments(group_id)'),
     db.prepare('CREATE INDEX IF NOT EXISTS idx_appointments_status_date ON appointments(status, scheduled_date)'),
   ]);
+
+  const columns = await db.prepare('PRAGMA table_info(appointments)').all<{ name: string }>();
+  const columnNames = new Set(columns.results.map((column) => column.name));
+  const alterations = [];
+  if (!columnNames.has('owner_name')) alterations.push(db.prepare("ALTER TABLE appointments ADD COLUMN owner_name TEXT NOT NULL DEFAULT ''"));
+  if (!columnNames.has('dog_name')) alterations.push(db.prepare("ALTER TABLE appointments ADD COLUMN dog_name TEXT NOT NULL DEFAULT ''"));
+  if (!columnNames.has('whatsapp')) alterations.push(db.prepare("ALTER TABLE appointments ADD COLUMN whatsapp TEXT NOT NULL DEFAULT ''"));
+  if (alterations.length) await db.batch(alterations);
 }
 
 function addDays(dateString: string, days: number) {
@@ -113,17 +136,24 @@ export async function POST(request: Request) {
     const startDate = String(body.scheduledDate ?? createdAt.slice(0, 10));
     const amountCents = body.amountCents === null || body.amountCents === undefined ? null : Number(body.amountCents);
     const sessionServices = Array.isArray(body.sessionServices) ? body.sessionServices : [];
+    const ownerName = String(body.ownerName ?? '');
+    const dogName = String(body.dogName ?? '');
+    const whatsapp = String(body.whatsapp ?? '');
+    const legacyName = [ownerName, dogName].filter(Boolean).join(' + ');
     const statements = Array.from({ length: totalSessions }, (_, index) =>
       db.prepare(
         `INSERT INTO appointments (
-          id, group_id, customer_pet_name, plan_type, amount_cents, paid,
+          id, group_id, customer_pet_name, owner_name, dog_name, whatsapp, plan_type, amount_cents, paid,
           scheduled_date, scheduled_time, status, services, session_number,
           total_sessions, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?)`,
       ).bind(
         crypto.randomUUID(),
         groupId,
-        String(body.customerPetName ?? ''),
+        legacyName,
+        ownerName,
+        dogName,
+        whatsapp,
         planType,
         amountCents,
         body.paid ? 1 : 0,
@@ -166,15 +196,33 @@ export async function POST(request: Request) {
   }
 
   if (action === 'edit') {
-    await db.prepare(
-      'UPDATE appointments SET customer_pet_name = ?, scheduled_time = ?, services = ?, amount_cents = ? WHERE id = ?',
-    ).bind(
-      String(body.customerPetName ?? ''),
-      String(body.scheduledTime ?? '09:00'),
-      JSON.stringify(Array.isArray(body.services) ? body.services : []),
-      body.amountCents === null || body.amountCents === undefined ? null : Number(body.amountCents),
-      String(body.id ?? ''),
-    ).run();
+    const ownerName = String(body.ownerName ?? '');
+    const dogName = String(body.dogName ?? '');
+    const id = String(body.id ?? '');
+    const row = await db.prepare('SELECT group_id FROM appointments WHERE id = ?')
+      .bind(id)
+      .first<{ group_id: string }>();
+    if (row) {
+      await db.batch([
+        db.prepare(
+          'UPDATE appointments SET customer_pet_name = ?, owner_name = ?, dog_name = ?, whatsapp = ? WHERE group_id = ?',
+        ).bind(
+          [ownerName, dogName].filter(Boolean).join(' + '),
+          ownerName,
+          dogName,
+          String(body.whatsapp ?? ''),
+          row.group_id,
+        ),
+        db.prepare(
+          'UPDATE appointments SET scheduled_time = ?, services = ?, amount_cents = ? WHERE id = ?',
+        ).bind(
+          String(body.scheduledTime ?? '09:00'),
+          JSON.stringify(Array.isArray(body.services) ? body.services : []),
+          body.amountCents === null || body.amountCents === undefined ? null : Number(body.amountCents),
+          id,
+        ),
+      ]);
+    }
   }
 
   if (action === 'renew') {
@@ -192,12 +240,13 @@ export async function POST(request: Request) {
       await db.batch(Array.from({ length: totalSessions }, (_, index) =>
         db.prepare(
           `INSERT INTO appointments (
-            id, group_id, customer_pet_name, plan_type, amount_cents, paid,
+            id, group_id, customer_pet_name, owner_name, dog_name, whatsapp, plan_type, amount_cents, paid,
             scheduled_date, scheduled_time, status, services, session_number,
             total_sessions, created_at
-          ) VALUES (?, ?, ?, ?, ?, 0, ?, ?, 'scheduled', ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 'scheduled', ?, ?, ?, ?)`,
         ).bind(
-          crypto.randomUUID(), groupId, previous.customer_pet_name, previous.plan_type,
+          crypto.randomUUID(), groupId, previous.customer_pet_name, previous.owner_name, previous.dog_name,
+          previous.whatsapp, previous.plan_type,
           previous.amount_cents, addDays(nextStart, intervalDays * index), previous.scheduled_time,
           previousSessions[index]?.services ?? previous.services, index + 1, totalSessions, createdAt,
         ),
