@@ -112,6 +112,7 @@ export async function POST(request: Request) {
     const createdAt = new Date().toISOString();
     const startDate = String(body.scheduledDate ?? createdAt.slice(0, 10));
     const amountCents = body.amountCents === null || body.amountCents === undefined ? null : Number(body.amountCents);
+    const sessionServices = Array.isArray(body.sessionServices) ? body.sessionServices : [];
     const statements = Array.from({ length: totalSessions }, (_, index) =>
       db.prepare(
         `INSERT INTO appointments (
@@ -128,7 +129,11 @@ export async function POST(request: Request) {
         body.paid ? 1 : 0,
         addDays(startDate, intervalDays * index),
         String(body.scheduledTime ?? '09:00'),
-        JSON.stringify(Array.isArray(body.services) ? body.services : []),
+        JSON.stringify(
+          Array.isArray(sessionServices[index])
+            ? sessionServices[index]
+            : Array.isArray(body.services) ? body.services : [],
+        ),
         index + 1,
         totalSessions,
         createdAt,
@@ -173,9 +178,11 @@ export async function POST(request: Request) {
   }
 
   if (action === 'renew') {
-    const previous = await db.prepare(
-      'SELECT * FROM appointments WHERE group_id = ? ORDER BY session_number DESC LIMIT 1',
-    ).bind(String(body.groupId ?? '')).first<AppointmentRow>();
+    const previousPlan = await db.prepare(
+      'SELECT * FROM appointments WHERE group_id = ? ORDER BY session_number ASC',
+    ).bind(String(body.groupId ?? '')).all<AppointmentRow>();
+    const previousSessions = previousPlan.results;
+    const previous = previousSessions.at(-1);
     if (previous) {
       const totalSessions = previous.plan_type === 'monthly' ? 4 : previous.plan_type === 'fortnightly' ? 2 : 1;
       const intervalDays = previous.plan_type === 'monthly' ? 7 : previous.plan_type === 'fortnightly' ? 14 : 0;
@@ -192,7 +199,7 @@ export async function POST(request: Request) {
         ).bind(
           crypto.randomUUID(), groupId, previous.customer_pet_name, previous.plan_type,
           previous.amount_cents, addDays(nextStart, intervalDays * index), previous.scheduled_time,
-          previous.services, index + 1, totalSessions, createdAt,
+          previousSessions[index]?.services ?? previous.services, index + 1, totalSessions, createdAt,
         ),
       ));
     }
