@@ -3,7 +3,7 @@
 import { DragEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   Activity, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight,
-  CircleDollarSign, Clock3, Dog, GripVertical, History, LoaderCircle, LogOut,
+  CircleDollarSign, Clock3, Dog, GripVertical, History, ListChecks, LoaderCircle, LogOut,
   MessageCircle, PawPrint, Pencil, Plus, RefreshCw, Scissors, ShieldCheck,
   Sparkles, Trash2, UserPlus, UserRound, Users, X,
 } from 'lucide-react';
@@ -72,6 +72,9 @@ const serviceOptions = [
 const planLabels: Record<PlanType, string> = { monthly: 'Mensal', fortnightly: 'Quinzenal', single: 'Avulso' };
 const planDescriptions: Record<PlanType, string> = {
   monthly: '4 banhos · toda semana', fortnightly: '2 banhos · a cada 15 dias', single: '1 atendimento',
+};
+const statusLabels: Record<Status, string> = {
+  scheduled: 'Em aberto', completed: 'Concluído', absent: 'Faltou',
 };
 
 function totalSessionsFor(planType: PlanType) {
@@ -154,6 +157,8 @@ export default function Home() {
   const [newOpen, setNewOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [planOpen, setPlanOpen] = useState(false);
+  const [selectedPlanGroupId, setSelectedPlanGroupId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [activeServiceSession, setActiveServiceSession] = useState(0);
   const [editing, setEditing] = useState<Appointment | null>(null);
@@ -217,6 +222,10 @@ export default function Home() {
     && (groupStats.get(item.groupId)?.scheduled ?? 0) === 0,
   );
   const editingPlan = editing ? appointments.filter((item) => item.groupId === editing.groupId) : [];
+  const selectedPlan = selectedPlanGroupId
+    ? appointments.filter((item) => item.groupId === selectedPlanGroupId).sort((a, b) => a.sessionNumber - b.sessionNumber)
+    : [];
+  const selectedPlanHead = selectedPlan[0];
   const completedToDelete = editingPlan.filter((item) => item.status === 'completed').length;
   const deleteBlockers = [
     completedToDelete
@@ -304,6 +313,11 @@ export default function Home() {
   function openDelete(item: Appointment) {
     setEditing({ ...item });
     setDeleteOpen(true);
+  }
+
+  function openPlan(item: Appointment) {
+    setSelectedPlanGroupId(item.groupId);
+    setPlanOpen(true);
   }
 
   async function saveEdit(event: FormEvent) {
@@ -626,6 +640,7 @@ export default function Home() {
                               <div className="flex flex-wrap items-center gap-1.5 sm:justify-end">
                                 <Button disabled={saving} aria-label="Mover para o dia anterior" title="Mover para o dia anterior" variant="ghost" size="icon-sm" onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, -1) }, 'Movido para o dia anterior')}><ChevronLeft /></Button>
                                 <Button disabled={saving} aria-label="Mover para o próximo dia" title="Mover para o próximo dia" variant="ghost" size="icon-sm" onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, 1) }, 'Movido para o próximo dia')}><ChevronRight /></Button>
+                                {item.planType !== 'single' && <Button disabled={saving} variant="outline" onClick={() => openPlan(item)} className="h-9 px-2.5 text-xs font-bold text-[#7353a6]"><ListChecks /> Ver plano</Button>}
                                 <Button disabled={saving} variant="outline" onClick={() => openDelete(item)} className="h-9 border-[#ead0cc] px-2.5 text-xs font-bold text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f]"><Trash2 /> {item.planType === 'single' ? 'Apagar banho' : 'Apagar plano'}</Button>
                                 {isRenewable ? (
                                   <Button disabled={saving} onClick={() => mutate({ action: 'renew', groupId: item.groupId }, 'Plano renovado mantendo o mesmo dia')} className="h-9 bg-[#9b6bc2] px-3 text-xs font-bold text-white hover:bg-[#8254a8]"><RefreshCw /> Renovar</Button>
@@ -688,6 +703,45 @@ export default function Home() {
           </div>
         </aside>
       </div>
+
+      <Dialog open={planOpen} onOpenChange={(open) => { setPlanOpen(open); if (!open) setSelectedPlanGroupId(null); }}>
+        <DialogContent className="max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-5 sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><ListChecks className="text-[#7353a6]" /> Atendimentos do plano</DialogTitle>
+            <DialogDescription>
+              {selectedPlanHead
+                ? `${selectedPlanHead.dogName || 'Cachorro sem nome'}${selectedPlanHead.ownerName ? ` · dono: ${selectedPlanHead.ownerName}` : ''}`
+                : 'Todas as sessões deste plano.'}
+            </DialogDescription>
+          </DialogHeader>
+          {selectedPlanHead && (
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[#e4dced] bg-white p-3">
+              <span className="rounded-full bg-[#eee6f7] px-2.5 py-1 text-xs font-extrabold text-[#7353a6]">Plano {planLabels[selectedPlanHead.planType]}</span>
+              <span className={`rounded-full px-2.5 py-1 text-xs font-extrabold ${selectedPlanHead.paid ? 'bg-[#e8f4eb] text-[#4f765c]' : 'bg-[#f7e7e2] text-[#ad533d]'}`}>{selectedPlanHead.paid ? 'Plano pago' : 'Plano pendente'}</span>
+              {formatMoney(selectedPlanHead.amountCents) && <span className="text-xs font-bold text-[#6f6179]">{formatMoney(selectedPlanHead.amountCents)}</span>}
+            </div>
+          )}
+          <div className="space-y-2.5">
+            {selectedPlan.map((session) => (
+              <article key={session.id} className="rounded-2xl border border-[#e4dced] bg-white p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-start gap-3">
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#eee6f7] font-heading text-sm font-extrabold text-[#7353a6]">{session.sessionNumber}</span>
+                    <div>
+                      <p className="font-heading text-sm font-extrabold capitalize">{prettyDate(session.scheduledDate)} · {session.scheduledTime}</p>
+                      <p className="mt-1 text-xs text-[#81748a]">{session.services.length ? session.services.join(' · ') : 'Sem serviços definidos'}</p>
+                    </div>
+                  </div>
+                  <span className={`rounded-full px-2.5 py-1 text-[11px] font-extrabold ${session.status === 'completed' ? 'bg-[#e8f4eb] text-[#4f765c]' : session.status === 'absent' ? 'bg-[#f7e7e2] text-[#ad533d]' : 'bg-[#f1edf5] text-[#776a80]'}`}>{statusLabels[session.status]}</span>
+                </div>
+              </article>
+            ))}
+          </div>
+          <DialogFooter className="-mx-5 -mb-5 px-5">
+            <Button variant="outline" onClick={() => { setPlanOpen(false); setSelectedPlanGroupId(null); }}>Fechar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={newOpen} onOpenChange={setNewOpen}>
         <DialogContent className="max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-5 sm:max-w-xl">
