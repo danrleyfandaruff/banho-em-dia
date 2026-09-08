@@ -9,6 +9,8 @@ export const appointments = sqliteTable(
     ownerName: text('owner_name').notNull().default(''),
     dogName: text('dog_name').notNull().default(''),
     whatsapp: text('whatsapp').notNull().default(''),
+    cpf: text('cpf').notNull().default(''),
+    paymentMethod: text('payment_method').notNull().default(''),
     planType: text('plan_type').notNull(),
     amountCents: integer('amount_cents'),
     paid: integer('paid', { mode: 'boolean' }).notNull().default(false),

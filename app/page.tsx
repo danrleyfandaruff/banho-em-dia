@@ -3,7 +3,7 @@
 import { DragEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   Activity, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight,
-  CircleDollarSign, Clock3, Dog, GripVertical, History, ListChecks, LoaderCircle, LogOut,
+  CircleDollarSign, Clock3, CreditCard, Dog, GripVertical, History, IdCard, ListChecks, LoaderCircle, LogOut,
   MessageCircle, PawPrint, Pencil, Plus, RefreshCw, Scissors, ShieldCheck,
   Sparkles, Trash2, UserPlus, UserRound, Users, X,
 } from 'lucide-react';
@@ -21,6 +21,7 @@ import { Switch } from '@/components/ui/switch';
 
 type PlanType = 'monthly' | 'fortnightly' | 'single';
 type Status = 'scheduled' | 'completed' | 'absent';
+type PaymentMethod = '' | 'pix' | 'cash' | 'debit' | 'credit';
 type Appointment = {
   id: string;
   groupId: string;
@@ -28,6 +29,8 @@ type Appointment = {
   ownerName: string;
   dogName: string;
   whatsapp: string;
+  cpf: string;
+  paymentMethod: PaymentMethod;
   planType: PlanType;
   amountCents: number | null;
   paid: boolean;
@@ -70,6 +73,9 @@ const serviceOptions = [
   'Remoção de subpelo',
 ];
 const planLabels: Record<PlanType, string> = { monthly: 'Mensal', fortnightly: 'Quinzenal', single: 'Avulso' };
+const paymentMethodLabels: Record<Exclude<PaymentMethod, ''>, string> = {
+  pix: 'Pix', cash: 'Dinheiro', debit: 'Cartão de débito', credit: 'Cartão de crédito',
+};
 const planDescriptions: Record<PlanType, string> = {
   monthly: '4 banhos · toda semana', fortnightly: '2 banhos · a cada 15 dias', single: '1 atendimento',
 };
@@ -134,6 +140,19 @@ function realToCents(value: string) {
   return digits ? Number(digits) : null;
 }
 
+function maskCpf(value: string) {
+  return value
+    .replace(/\D/g, '')
+    .slice(0, 11)
+    .replace(/(\d{3})(\d)/, '$1.$2')
+    .replace(/(\d{3})(\d)/, '$1.$2')
+    .replace(/(\d{3})(\d{1,2})$/, '$1-$2');
+}
+
+function paymentMethodLabel(value: PaymentMethod) {
+  return value ? paymentMethodLabels[value] : '';
+}
+
 function whatsappUrl(value: string) {
   const digits = value.replace(/\D/g, '');
   if (!digits) return '';
@@ -142,7 +161,8 @@ function whatsappUrl(value: string) {
 }
 
 const emptyForm = () => ({
-  ownerName: '', dogName: '', whatsapp: '', planType: 'monthly' as PlanType, amount: '', paid: false,
+  ownerName: '', dogName: '', whatsapp: '', cpf: '', paymentMethod: '' as PaymentMethod,
+  planType: 'monthly' as PlanType, amount: '', paid: false,
   scheduledDate: localDateString(), scheduledTime: '09:00',
   sessionServices: Array.from({ length: 4 }, () => ['Banho']),
 });
@@ -250,6 +270,7 @@ export default function Home() {
       move: 'Movendo atendimento...',
       status: 'Atualizando atendimento...',
       paid: 'Atualizando pagamento...',
+      payment_method: 'Atualizando forma de pagamento...',
       renew: 'Renovando plano...',
       delete: 'Apagando agendamento...',
     };
@@ -364,7 +385,7 @@ export default function Home() {
     if (!editing) return;
     const ok = await mutate({
       action: 'edit', id: editing.id, ownerName: editing.ownerName, dogName: editing.dogName,
-      whatsapp: editing.whatsapp,
+      whatsapp: editing.whatsapp, cpf: editing.cpf, paymentMethod: editing.paymentMethod,
       scheduledDate: editing.scheduledDate, scheduledTime: editing.scheduledTime,
       services: editing.services, amountCents: editing.amountCents,
     }, editing.planType === 'single' ? 'Atendimento atualizado' : 'Atendimento e próximas sessões atualizados');
@@ -665,6 +686,7 @@ export default function Home() {
                                       <Pencil size={12} className="text-[#9b8ca5] opacity-0 transition group-hover/name:opacity-100" />
                                     </button>
                                     {item.ownerName && <p className="text-[11px] font-semibold text-[#92849c]">Dono: {item.ownerName}</p>}
+                                    {item.cpf && <p className="text-[10px] font-semibold text-[#9b8ca5]">CPF: {item.cpf}</p>}
                                   </div>
                                   {item.whatsapp && (
                                     <a
@@ -693,6 +715,7 @@ export default function Home() {
                                     <CircleDollarSign size={13} /> {item.planType === 'single' ? (item.paid ? 'Pago' : 'Pendente') : (item.paid ? 'Plano pago' : 'Plano pendente')}
                                   </button>
                                   {formatMoney(item.amountCents) && <span className="text-[11px] font-semibold text-[#81748a]">{formatMoney(item.amountCents)}</span>}
+                                  {item.paymentMethod && <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#81748a]"><CreditCard size={12} /> {paymentMethodLabel(item.paymentMethod)}</span>}
                                 </div>
                                 <p className="flex flex-wrap items-center gap-x-1.5 text-sm text-[#7d7087]"><Scissors size={14} /> {item.services.length ? item.services.join(' · ') : 'Sem serviços definidos'}</p>
                                 {item.planType !== 'single' && <p className="mt-1.5 text-[11px] font-semibold text-[#92849c]">{stats.completed} concluídas · {stats.absent} faltas</p>}
@@ -785,7 +808,9 @@ export default function Home() {
                       <div>
                         <p className="font-heading text-base font-extrabold">{item.dogName || 'Cachorro sem nome'}</p>
                         {item.ownerName && <p className="text-[11px] font-semibold text-[#92849c]">Dono: {item.ownerName}</p>}
+                        {item.cpf && <p className="text-[10px] font-semibold text-[#9b8ca5]">CPF: {item.cpf}</p>}
                         <p className="mt-1 text-xs text-[#81748a]">{planLabels[item.planType]} · sessão {item.sessionNumber} de {item.totalSessions}</p>
+                        {item.paymentMethod && <p className="mt-1 flex items-center gap-1 text-[11px] font-semibold text-[#81748a]"><CreditCard size={12} /> {paymentMethodLabel(item.paymentMethod)}</p>}
                       </div>
                     </div>
                     <span className={`rounded-full px-2.5 py-1 text-[11px] font-extrabold ${item.status === 'completed' ? 'bg-[#e8f4eb] text-[#4f765c]' : item.status === 'absent' ? 'bg-[#f7e7e2] text-[#ad533d]' : 'bg-[#f1edf5] text-[#776a80]'}`}>{statusLabels[item.status]}</span>
@@ -827,7 +852,7 @@ export default function Home() {
             <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><ListChecks className="text-[#7353a6]" /> Atendimentos do plano</DialogTitle>
             <DialogDescription>
               {selectedPlanHead
-                ? `${selectedPlanHead.dogName || 'Cachorro sem nome'}${selectedPlanHead.ownerName ? ` · dono: ${selectedPlanHead.ownerName}` : ''}`
+                ? `${selectedPlanHead.dogName || 'Cachorro sem nome'}${selectedPlanHead.ownerName ? ` · dono: ${selectedPlanHead.ownerName}` : ''}${selectedPlanHead.cpf ? ` · CPF: ${selectedPlanHead.cpf}` : ''}`
                 : 'Todas as sessões deste plano.'}
             </DialogDescription>
           </DialogHeader>
@@ -838,6 +863,7 @@ export default function Home() {
                   <span className="rounded-full bg-[#eee6f7] px-2.5 py-1 text-xs font-extrabold text-[#7353a6]">Plano {planLabels[selectedPlanHead.planType]}</span>
                   <span className={`rounded-full px-2.5 py-1 text-xs font-extrabold ${selectedPlanHead.paid ? 'bg-[#e8f4eb] text-[#4f765c]' : 'bg-[#f7e7e2] text-[#ad533d]'}`}>{selectedPlanHead.paid ? 'Plano pago' : 'Plano pendente'}</span>
                   {formatMoney(selectedPlanHead.amountCents) && <span className="text-xs font-bold text-[#6f6179]">{formatMoney(selectedPlanHead.amountCents)}</span>}
+                  {selectedPlanHead.paymentMethod && <span className="inline-flex items-center gap-1 text-xs font-bold text-[#6f6179]"><CreditCard size={13} /> {paymentMethodLabel(selectedPlanHead.paymentMethod)}</span>}
                 </div>
                 <div className="flex items-center gap-2 text-[11px] font-bold text-[#81748a]">
                   <span>{selectedPlanStats.completed} concluídos</span><span>·</span><span>{selectedPlanStats.absent} faltas</span><span>·</span><span>{selectedPlanStats.scheduled} abertos</span>
@@ -856,6 +882,25 @@ export default function Home() {
                 >
                   <CircleDollarSign /> {selectedPlanHead.paid ? 'Marcar pendente' : 'Marcar plano pago'}
                 </Button>
+                <label className="flex items-center gap-2 rounded-lg border border-[#ded5e6] bg-white px-2.5">
+                  <CreditCard size={15} className="text-[#7353a6]" />
+                  <span className="sr-only">Forma de pagamento</span>
+                  <select
+                    disabled={saving}
+                    value={selectedPlanHead.paymentMethod}
+                    onChange={(event) => mutate(
+                      { action: 'payment_method', id: selectedPlanHead.id, paymentMethod: event.target.value },
+                      'Forma de pagamento atualizada',
+                    )}
+                    className="h-9 bg-transparent text-xs font-bold outline-none disabled:opacity-50"
+                  >
+                    <option value="">Forma de pagamento</option>
+                    <option value="pix">Pix</option>
+                    <option value="cash">Dinheiro</option>
+                    <option value="debit">Cartão de débito</option>
+                    <option value="credit">Cartão de crédito</option>
+                  </select>
+                </label>
                 <Button disabled={saving} variant="outline" onClick={deleteFromPlan} className="border-[#ead0cc] font-bold text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f]"><Trash2 /> Apagar plano</Button>
               </div>
             </div>
@@ -941,6 +986,10 @@ export default function Home() {
               <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><UserRound size={14} /> Nome do dono</span><Input autoFocus value={form.ownerName} onChange={(event) => setForm({ ...form, ownerName: event.target.value })} placeholder="Ex.: Ana" className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><Dog size={14} /> Nome do cachorro</span><Input value={form.dogName} onChange={(event) => setForm({ ...form, dogName: event.target.value })} placeholder="Ex.: Bob" className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><MessageCircle size={14} /> WhatsApp</span><Input type="tel" inputMode="tel" value={form.whatsapp} onChange={(event) => setForm({ ...form, whatsapp: event.target.value })} placeholder="(47) 99999-9999" className="h-11 bg-white" /></label>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><IdCard size={14} /> CPF (opcional)</span><Input inputMode="numeric" value={form.cpf} onChange={(event) => setForm({ ...form, cpf: maskCpf(event.target.value) })} placeholder="000.000.000-00" className="h-11 bg-white" /></label>
+              <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><CreditCard size={14} /> Forma de pagamento (opcional)</span><select value={form.paymentMethod} onChange={(event) => setForm({ ...form, paymentMethod: event.target.value as PaymentMethod })} className="h-11 w-full rounded-md border border-input bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#7353a6]/30"><option value="">Não informado</option><option value="pix">Pix</option><option value="cash">Dinheiro</option><option value="debit">Cartão de débito</option><option value="credit">Cartão de crédito</option></select></label>
             </div>
             <div>
               <span className="mb-2 block text-xs font-bold text-[#6f6179]">Tipo de plano</span>
@@ -1033,7 +1082,11 @@ export default function Home() {
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Nome do dono</span><Input value={editing.ownerName} onChange={(event) => setEditing({ ...editing, ownerName: event.target.value })} className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Nome do cachorro</span><Input value={editing.dogName} onChange={(event) => setEditing({ ...editing, dogName: event.target.value })} className="h-11 bg-white" /></label>
             </div>
-            <label className="block"><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><MessageCircle size={14} /> WhatsApp</span><Input type="tel" inputMode="tel" value={editing.whatsapp} onChange={(event) => setEditing({ ...editing, whatsapp: event.target.value })} placeholder="(47) 99999-9999" className="h-11 bg-white" /></label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><MessageCircle size={14} /> WhatsApp</span><Input type="tel" inputMode="tel" value={editing.whatsapp} onChange={(event) => setEditing({ ...editing, whatsapp: event.target.value })} placeholder="(47) 99999-9999" className="h-11 bg-white" /></label>
+              <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><IdCard size={14} /> CPF (opcional)</span><Input inputMode="numeric" value={editing.cpf} onChange={(event) => setEditing({ ...editing, cpf: maskCpf(event.target.value) })} placeholder="000.000.000-00" className="h-11 bg-white" /></label>
+            </div>
+            <label className="block"><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><CreditCard size={14} /> Forma de pagamento (opcional)</span><select value={editing.paymentMethod} onChange={(event) => setEditing({ ...editing, paymentMethod: event.target.value as PaymentMethod })} className="h-11 w-full rounded-md border border-input bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#7353a6]/30"><option value="">Não informado</option><option value="pix">Pix</option><option value="cash">Dinheiro</option><option value="debit">Cartão de débito</option><option value="credit">Cartão de crédito</option></select></label>
             <div className="grid gap-3 sm:grid-cols-3">
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Data do banho</span><Input type="date" value={editing.scheduledDate} onChange={(event) => setEditing({ ...editing, scheduledDate: event.target.value })} className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Horário</span><Input type="time" value={editing.scheduledTime} onChange={(event) => setEditing({ ...editing, scheduledTime: event.target.value })} className="h-11 bg-white" /></label>

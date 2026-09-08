@@ -22,6 +22,13 @@
       "when": 1788872688491,
       "tag": "0002_loud_doctor_octopus",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1788910017088,
+      "tag": "0003_add_payment_fields",
+      "breakpoints": true
     }
   ]
 }

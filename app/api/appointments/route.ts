@@ -8,6 +8,8 @@ type AppointmentRow = {
   owner_name: string;
   dog_name: string;
   whatsapp: string;
+  cpf: string;
+  payment_method: string;
   plan_type: string;
   amount_cents: number | null;
   paid: number;
@@ -27,6 +29,8 @@ type Appointment = {
   ownerName: string;
   dogName: string;
   whatsapp: string;
+  cpf: string;
+  paymentMethod: '' | 'pix' | 'cash' | 'debit' | 'credit';
   planType: 'monthly' | 'fortnightly' | 'single';
   amountCents: number | null;
   paid: boolean;
@@ -55,6 +59,8 @@ function mapRow(row: AppointmentRow): Appointment {
     ownerName,
     dogName,
     whatsapp: row.whatsapp || '',
+    cpf: row.cpf || '',
+    paymentMethod: (row.payment_method || '') as Appointment['paymentMethod'],
     planType: row.plan_type as Appointment['planType'],
     amountCents: row.amount_cents,
     paid: Boolean(row.paid),
@@ -77,6 +83,8 @@ async function ensureSchema() {
       owner_name TEXT NOT NULL DEFAULT '',
       dog_name TEXT NOT NULL DEFAULT '',
       whatsapp TEXT NOT NULL DEFAULT '',
+      cpf TEXT NOT NULL DEFAULT '',
+      payment_method TEXT NOT NULL DEFAULT '',
       plan_type TEXT NOT NULL,
       amount_cents INTEGER,
       paid INTEGER NOT NULL DEFAULT 0,
@@ -99,6 +107,8 @@ async function ensureSchema() {
   if (!columnNames.has('owner_name')) alterations.push(db.prepare("ALTER TABLE appointments ADD COLUMN owner_name TEXT NOT NULL DEFAULT ''"));
   if (!columnNames.has('dog_name')) alterations.push(db.prepare("ALTER TABLE appointments ADD COLUMN dog_name TEXT NOT NULL DEFAULT ''"));
   if (!columnNames.has('whatsapp')) alterations.push(db.prepare("ALTER TABLE appointments ADD COLUMN whatsapp TEXT NOT NULL DEFAULT ''"));
+  if (!columnNames.has('cpf')) alterations.push(db.prepare("ALTER TABLE appointments ADD COLUMN cpf TEXT NOT NULL DEFAULT ''"));
+  if (!columnNames.has('payment_method')) alterations.push(db.prepare("ALTER TABLE appointments ADD COLUMN payment_method TEXT NOT NULL DEFAULT ''"));
   if (alterations.length) await db.batch(alterations);
 }
 
@@ -170,14 +180,16 @@ export async function POST(request: Request) {
     const ownerName = String(body.ownerName ?? '');
     const dogName = String(body.dogName ?? '');
     const whatsapp = String(body.whatsapp ?? '');
+    const cpf = String(body.cpf ?? '');
+    const paymentMethod = String(body.paymentMethod ?? '');
     const legacyName = [ownerName, dogName].filter(Boolean).join(' + ');
     const statements = Array.from({ length: totalSessions }, (_, index) =>
       db.prepare(
         `INSERT INTO appointments (
-          id, group_id, customer_pet_name, owner_name, dog_name, whatsapp, plan_type, amount_cents, paid,
+          id, group_id, customer_pet_name, owner_name, dog_name, whatsapp, cpf, payment_method, plan_type, amount_cents, paid,
           scheduled_date, scheduled_time, status, services, session_number,
           total_sessions, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?)`,
       ).bind(
         crypto.randomUUID(),
         groupId,
@@ -185,6 +197,8 @@ export async function POST(request: Request) {
         ownerName,
         dogName,
         whatsapp,
+        cpf,
+        paymentMethod,
         planType,
         amountCents,
         body.paid ? 1 : 0,
@@ -204,7 +218,7 @@ export async function POST(request: Request) {
     await writeAudit(
       auth.user, 'appointment_created', 'appointment_group', groupId,
       `Criou ${totalSessions === 1 ? 'um banho avulso' : `um plano com ${totalSessions} sessões`} para ${dogName || ownerName || 'cliente sem nome'}`,
-      { planType, totalSessions, startDate },
+      { planType, totalSessions, startDate, paymentMethod },
     );
   }
 
@@ -248,6 +262,23 @@ export async function POST(request: Request) {
     }
   }
 
+  if (action === 'payment_method') {
+    const row = await db.prepare('SELECT * FROM appointments WHERE id = ?')
+      .bind(String(body.id ?? ''))
+      .first<AppointmentRow>();
+    if (row) {
+      const paymentMethod = String(body.paymentMethod ?? '');
+      await db.prepare('UPDATE appointments SET payment_method = ? WHERE group_id = ?')
+        .bind(paymentMethod, row.group_id)
+        .run();
+      await writeAudit(
+        auth.user, 'payment_method_updated', 'appointment_group', row.group_id,
+        `Atualizou a forma de pagamento de ${appointmentName(row)}`,
+        { from: row.payment_method, to: paymentMethod },
+      );
+    }
+  }
+
   if (action === 'move') {
     const target = await db.prepare('SELECT * FROM appointments WHERE id = ?')
       .bind(String(body.id ?? ''))
@@ -276,12 +307,14 @@ export async function POST(request: Request) {
       const dateStatements = await rescheduleStatements(row, scheduledDate);
       await db.batch([
         db.prepare(
-          'UPDATE appointments SET customer_pet_name = ?, owner_name = ?, dog_name = ?, whatsapp = ? WHERE group_id = ?',
+          'UPDATE appointments SET customer_pet_name = ?, owner_name = ?, dog_name = ?, whatsapp = ?, cpf = ?, payment_method = ? WHERE group_id = ?',
         ).bind(
           [ownerName, dogName].filter(Boolean).join(' + '),
           ownerName,
           dogName,
           String(body.whatsapp ?? ''),
+          String(body.cpf ?? ''),
+          String(body.paymentMethod ?? ''),
           row.group_id,
         ),
         db.prepare(
@@ -302,6 +335,7 @@ export async function POST(request: Request) {
           scheduledDate,
           sessionNumber: row.session_number,
           futureSessionsUpdated: dateStatements.length - 1,
+          paymentMethod: String(body.paymentMethod ?? ''),
         },
       );
     }
@@ -360,13 +394,13 @@ export async function POST(request: Request) {
     await db.batch(Array.from({ length: totalSessions }, (_, index) =>
       db.prepare(
         `INSERT INTO appointments (
-          id, group_id, customer_pet_name, owner_name, dog_name, whatsapp, plan_type, amount_cents, paid,
+          id, group_id, customer_pet_name, owner_name, dog_name, whatsapp, cpf, payment_method, plan_type, amount_cents, paid,
           scheduled_date, scheduled_time, status, services, session_number,
           total_sessions, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 'scheduled', ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 'scheduled', ?, ?, ?, ?)`,
       ).bind(
         crypto.randomUUID(), groupId, previous.customer_pet_name, previous.owner_name, previous.dog_name,
-        previous.whatsapp, previous.plan_type,
+        previous.whatsapp, previous.cpf, previous.payment_method, previous.plan_type,
         previous.amount_cents, addDays(nextStart, intervalDays * index), previous.scheduled_time,
         previousSessions[index]?.services ?? previous.services, index + 1, totalSessions, createdAt,
       ),
