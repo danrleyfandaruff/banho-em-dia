@@ -303,6 +303,37 @@ export async function POST(request: Request) {
     }
   }
 
+  if (action === 'delete') {
+    const target = await db.prepare('SELECT * FROM appointments WHERE id = ?')
+      .bind(String(body.id ?? ''))
+      .first<AppointmentRow>();
+    if (!target) return Response.json({ error: 'not_found' }, { status: 404 });
+
+    const plan = await db.prepare(
+      'SELECT * FROM appointments WHERE group_id = ? ORDER BY session_number ASC',
+    ).bind(target.group_id).all<AppointmentRow>();
+    const completedCount = plan.results.filter((session) => session.status === 'completed').length;
+    const isPaid = plan.results.some((session) => Boolean(session.paid));
+    const blockers: string[] = [];
+    if (completedCount) {
+      blockers.push(`${completedCount} ${completedCount === 1 ? 'banho concluído' : 'banhos concluídos'}`);
+    }
+    if (isPaid) blockers.push('pagamento marcado como pago');
+
+    if (blockers.length) {
+      return Response.json({ error: 'delete_blocked', blockers }, { status: 409 });
+    }
+
+    await db.prepare('DELETE FROM appointments WHERE group_id = ?')
+      .bind(target.group_id)
+      .run();
+    await writeAudit(
+      auth.user, 'appointment_deleted', 'appointment_group', target.group_id,
+      `Apagou ${target.plan_type === 'single' ? 'o banho avulso' : `o plano com ${plan.results.length} banhos`} de ${appointmentName(target)}`,
+      { planType: target.plan_type, sessionsDeleted: plan.results.length },
+    );
+  }
+
   if (action === 'renew') {
     const previousPlan = await db.prepare(
       'SELECT * FROM appointments WHERE group_id = ? ORDER BY session_number ASC',

@@ -3,11 +3,16 @@
 import { DragEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   Activity, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight,
-  CircleDollarSign, Clock3, Dog, GripVertical, History, LogOut, MessageCircle,
-  PawPrint, Pencil, Plus, RefreshCw, Scissors, ShieldCheck, Sparkles, UserPlus,
-  UserRound, Users, X,
+  CircleDollarSign, Clock3, Dog, GripVertical, History, LoaderCircle, LogOut,
+  MessageCircle, PawPrint, Pencil, Plus, RefreshCw, Scissors, ShieldCheck,
+  Sparkles, Trash2, UserPlus, UserRound, Users, X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogMedia,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
@@ -148,11 +153,13 @@ export default function Home() {
   const [saving, setSaving] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [activeServiceSession, setActiveServiceSession] = useState(0);
   const [editing, setEditing] = useState<Appointment | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(() => localDateString().slice(0, 7));
   const [notice, setNotice] = useState('');
+  const [loaderMessage, setLoaderMessage] = useState('Salvando...');
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [teamOpen, setTeamOpen] = useState(false);
@@ -203,15 +210,40 @@ export default function Home() {
   const todayAppointments = appointments.filter((item) => item.scheduledDate === today);
   const pendingGroups = Array.from(new Map(appointments.filter((item) => !item.paid).map((item) => [item.groupId, item])).values());
   const renewalItems = appointments.filter((item) => item.sessionNumber === item.totalSessions && item.status === 'completed');
+  const editingPlan = editing ? appointments.filter((item) => item.groupId === editing.groupId) : [];
+  const completedToDelete = editingPlan.filter((item) => item.status === 'completed').length;
+  const deleteBlockers = [
+    completedToDelete
+      ? `${completedToDelete} ${completedToDelete === 1 ? 'banho já foi concluído' : 'banhos já foram concluídos'}`
+      : '',
+    editingPlan.some((item) => item.paid) ? 'o pagamento está marcado como pago' : '',
+  ].filter(Boolean);
 
   async function mutate(payload: Record<string, unknown>, message?: string) {
+    const loadingLabels: Record<string, string> = {
+      create: 'Criando agendamento...',
+      edit: 'Salvando alterações...',
+      move: 'Movendo atendimento...',
+      status: 'Atualizando atendimento...',
+      paid: 'Atualizando pagamento...',
+      renew: 'Renovando plano...',
+      delete: 'Apagando agendamento...',
+    };
+    setLoaderMessage(loadingLabels[String(payload.action ?? '')] ?? 'Salvando...');
     setSaving(true);
     try {
       const response = await fetch('/api/appointments', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
       });
-      if (!response.ok) throw new Error('request failed');
       const data = await response.json();
+      if (!response.ok) {
+        const blockerMessage = Array.isArray(data.blockers)
+          ? `Não é possível apagar: ${data.blockers.join(' e ')}.`
+          : 'Não foi possível salvar. Tente novamente.';
+        setNotice(blockerMessage);
+        window.setTimeout(() => setNotice(''), 4200);
+        return false;
+      }
       setAppointments(data.appointments ?? []);
       if (message) {
         setNotice(message);
@@ -271,6 +303,19 @@ export default function Home() {
       services: editing.services, amountCents: editing.amountCents,
     }, editing.planType === 'single' ? 'Atendimento atualizado' : 'Atendimento e próximas sessões atualizados');
     if (ok) setEditOpen(false);
+  }
+
+  async function deleteAppointment() {
+    if (!editing || deleteBlockers.length) return;
+    const ok = await mutate(
+      { action: 'delete', id: editing.id },
+      editing.planType === 'single' ? 'Banho avulso apagado' : 'Plano e todos os banhos apagados',
+    );
+    if (ok) {
+      setDeleteOpen(false);
+      setEditOpen(false);
+      setEditing(null);
+    }
   }
 
   function startDragging(event: DragEvent<HTMLButtonElement>, item: Appointment) {
@@ -374,7 +419,7 @@ export default function Home() {
   if (authStatus === 'loading') {
     return (
       <main className="grid min-h-screen place-items-center bg-[#f7f3fb] px-5 text-[#302638]">
-        <div className="text-center"><PawPrint className="mx-auto mb-3 text-[#7353a6]" size={38} /><p className="font-heading font-extrabold">Abrindo o HEIN PET SALON...</p></div>
+        <div className="text-center"><span className="relative mx-auto mb-3 block h-11 w-11"><PawPrint className="absolute inset-0 m-auto text-[#7353a6]" size={27} /><LoaderCircle className="absolute inset-0 animate-spin text-[#b9a5ca]" size={44} /></span><p className="font-heading font-extrabold">Abrindo o HEIN PET SALON...</p></div>
       </main>
     );
   }
@@ -439,7 +484,13 @@ export default function Home() {
         </div>
       </header>
 
-      {notice && (
+      {saving && (
+        <div role="status" aria-live="polite" className="fixed right-4 top-24 z-[70] flex items-center gap-2 rounded-xl bg-[#7353a6] px-4 py-3 text-sm font-bold text-white shadow-xl">
+          <LoaderCircle className="animate-spin" size={18} /> {loaderMessage}
+        </div>
+      )}
+
+      {notice && !saving && (
         <div role="status" className="fixed right-4 top-24 z-50 flex items-center gap-2 rounded-xl bg-[#3c3047] px-4 py-3 text-sm font-bold text-white shadow-xl">
           <CheckCircle2 size={17} /> {notice}
         </div>
@@ -461,7 +512,7 @@ export default function Home() {
           </div>
 
           {loading ? (
-            <div className="rounded-2xl border border-[#e4dced] bg-[#fffbff] p-12 text-center text-sm font-semibold text-[#81748a]">Carregando agenda...</div>
+            <div className="rounded-2xl border border-[#e4dced] bg-[#fffbff] p-12 text-center text-sm font-semibold text-[#81748a]"><LoaderCircle className="mx-auto mb-2 animate-spin text-[#7353a6]" /> Carregando agenda...</div>
           ) : (
             <div className="space-y-4">
               {days.map((date) => {
@@ -503,7 +554,8 @@ export default function Home() {
                             >
                               <button
                                 type="button"
-                                draggable
+                                draggable={!saving}
+                                disabled={saving}
                                 onDragStart={(event) => startDragging(event, item)}
                                 onDragEnd={() => { setDraggingId(null); setDropTarget(null); }}
                                 aria-label={`Arrastar ${item.dogName || item.ownerName || 'agendamento'} para outro dia`}
@@ -537,7 +589,7 @@ export default function Home() {
                                     </a>
                                   )}
                                   <span className="rounded-full bg-[#eee6f7] px-2 py-0.5 text-[11px] font-bold text-[#7353a6]">{planLabels[item.planType]} · {item.sessionNumber} de {item.totalSessions}</span>
-                                  <button onClick={() => mutate({ action: 'paid', id: item.id, paid: !item.paid }, item.paid ? 'Marcado como pendente' : 'Pagamento confirmado')} className={`inline-flex items-center gap-1 text-[11px] font-bold ${item.paid ? 'text-[#568066]' : 'text-[#c4563c]'}`}>
+                                  <button disabled={saving} onClick={() => mutate({ action: 'paid', id: item.id, paid: !item.paid }, item.paid ? 'Marcado como pendente' : 'Pagamento confirmado')} className={`inline-flex items-center gap-1 text-[11px] font-bold disabled:opacity-50 ${item.paid ? 'text-[#568066]' : 'text-[#c4563c]'}`}>
                                     <CircleDollarSign size={13} /> {item.paid ? 'Pago' : 'Pendente'}
                                   </button>
                                   {formatMoney(item.amountCents) && <span className="text-[11px] font-semibold text-[#81748a]">{formatMoney(item.amountCents)}</span>}
@@ -546,8 +598,8 @@ export default function Home() {
                                 {item.planType !== 'single' && <p className="mt-1.5 text-[11px] font-semibold text-[#92849c]">{stats.completed} concluídas · {stats.absent} faltas</p>}
                               </div>
                               <div className="flex flex-wrap items-center gap-1.5 sm:justify-end">
-                                <Button aria-label="Mover para o dia anterior" title="Mover para o dia anterior" variant="ghost" size="icon-sm" onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, -1) }, 'Movido para o dia anterior')}><ChevronLeft /></Button>
-                                <Button aria-label="Mover para o próximo dia" title="Mover para o próximo dia" variant="ghost" size="icon-sm" onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, 1) }, 'Movido para o próximo dia')}><ChevronRight /></Button>
+                                <Button disabled={saving} aria-label="Mover para o dia anterior" title="Mover para o dia anterior" variant="ghost" size="icon-sm" onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, -1) }, 'Movido para o dia anterior')}><ChevronLeft /></Button>
+                                <Button disabled={saving} aria-label="Mover para o próximo dia" title="Mover para o próximo dia" variant="ghost" size="icon-sm" onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, 1) }, 'Movido para o próximo dia')}><ChevronRight /></Button>
                                 {isRenewable ? (
                                   <Button disabled={saving} onClick={() => mutate({ action: 'renew', groupId: item.groupId }, 'Plano renovado mantendo o mesmo dia')} className="h-9 bg-[#9b6bc2] px-3 text-xs font-bold text-white hover:bg-[#8254a8]"><RefreshCw /> Renovar</Button>
                                 ) : item.status === 'scheduled' ? (
@@ -556,7 +608,7 @@ export default function Home() {
                                     <Button disabled={saving} onClick={() => mutate({ action: 'status', id: item.id, status: 'completed' }, 'Atendimento concluído')} className="h-9 bg-[#7353a6] px-3 text-xs font-bold text-white hover:bg-[#5e3f90]"><Check /> Concluir</Button>
                                   </>
                                 ) : (
-                                  <Button variant="ghost" onClick={() => mutate({ action: 'status', id: item.id, status: 'scheduled' }, 'Atendimento reaberto')} className="h-9 px-2.5 text-xs font-bold text-[#76687f]">{item.status === 'completed' ? 'Concluído' : 'Faltou'} · reabrir</Button>
+                                  <Button disabled={saving} variant="ghost" onClick={() => mutate({ action: 'status', id: item.id, status: 'scheduled' }, 'Atendimento reaberto')} className="h-9 px-2.5 text-xs font-bold text-[#76687f]">{item.status === 'completed' ? 'Concluído' : 'Faltou'} · reabrir</Button>
                                 )}
                               </div>
                             </div>
@@ -595,12 +647,12 @@ export default function Home() {
             ) : (
               <div className="space-y-3 text-sm">
                 {pendingGroups.slice(0, 3).map((item) => (
-                  <button key={`pending-${item.groupId}`} onClick={() => mutate({ action: 'paid', id: item.id, paid: true }, 'Pagamento confirmado')} className="w-full rounded-xl bg-[#f7eee9] p-3 text-left transition hover:bg-[#f2e3da]">
+                  <button disabled={saving} key={`pending-${item.groupId}`} onClick={() => mutate({ action: 'paid', id: item.id, paid: true }, 'Pagamento confirmado')} className="w-full rounded-xl bg-[#f7eee9] p-3 text-left transition hover:bg-[#f2e3da] disabled:opacity-50">
                     <p className="font-bold">{item.dogName || item.ownerName || 'Sem nome'} · pendente</p><p className="mt-1 text-xs text-[#7e7771]">Toque para marcar como pago</p>
                   </button>
                 ))}
                 {renewalItems.slice(0, 3).map((item) => (
-                  <button key={`renew-${item.id}`} onClick={() => mutate({ action: 'renew', groupId: item.groupId }, 'Plano renovado mantendo o mesmo dia')} className="w-full rounded-xl bg-[#f1ecf7] p-3 text-left transition hover:bg-[#e9e0f3]">
+                  <button disabled={saving} key={`renew-${item.id}`} onClick={() => mutate({ action: 'renew', groupId: item.groupId }, 'Plano renovado mantendo o mesmo dia')} className="w-full rounded-xl bg-[#f1ecf7] p-3 text-left transition hover:bg-[#e9e0f3] disabled:opacity-50">
                     <p className="font-bold">{item.dogName || item.ownerName || 'Sem nome'} · última sessão</p><p className="mt-1 text-xs font-extrabold text-[#7353a6]">Renovar plano →</p>
                   </button>
                 ))}
@@ -699,7 +751,7 @@ export default function Home() {
             <label className="flex cursor-pointer items-center justify-between rounded-xl border border-[#e4dced] bg-white p-3.5"><span><strong className="block text-sm">Já está pago?</strong><small className="text-xs text-[#85768f]">Você pode mudar isso depois</small></span><Switch checked={form.paid} onCheckedChange={(checked) => setForm({ ...form, paid: checked })} /></label>
             <DialogFooter className="-mx-5 -mb-5 px-5">
               <Button type="button" variant="outline" onClick={() => setNewOpen(false)}>Cancelar</Button>
-              <Button type="submit" disabled={saving} className="bg-[#9b6bc2] font-bold text-white hover:bg-[#8254a8]"><Sparkles /> {saving ? 'Salvando...' : 'Criar agendamento'}</Button>
+              <Button type="submit" disabled={saving} className="bg-[#9b6bc2] font-bold text-white hover:bg-[#8254a8]">{saving ? <LoaderCircle className="animate-spin" /> : <Sparkles />} {saving ? 'Salvando...' : 'Criar agendamento'}</Button>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -720,10 +772,36 @@ export default function Home() {
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Valor (opcional)</span><Input inputMode="numeric" value={formatMoney(editing.amountCents) ?? ''} onChange={(event) => setEditing({ ...editing, amountCents: realToCents(event.target.value) })} placeholder="R$ 0,00" className="h-11 bg-white font-semibold tabular-nums" /></label>
             </div>
             <div><span className="mb-2 block text-xs font-bold text-[#6f6179]">O que é para fazer</span><div className="flex flex-wrap gap-2">{serviceOptions.map((service) => <button type="button" key={service} onClick={() => toggleService(service, true)} className={`rounded-full border px-3 py-2 text-xs font-bold ${editing.services.includes(service) ? 'border-[#7353a6] bg-[#7353a6] text-white' : 'border-[#e4dced] bg-white text-[#6f6179]'}`}>{service}</button>)}</div></div>
-            <DialogFooter className="-mx-5 -mb-5 px-5"><Button type="button" variant="outline" onClick={() => setEditOpen(false)}>Cancelar</Button><Button type="submit" disabled={saving} className="bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90]">Salvar alterações</Button></DialogFooter>
+            <DialogFooter className="-mx-5 -mb-5 px-5 sm:justify-between">
+              <Button type="button" variant="outline" disabled={saving} onClick={() => setDeleteOpen(true)} className="border-[#ead0cc] text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f]"><Trash2 /> {editing.planType === 'single' ? 'Apagar banho' : 'Apagar plano'}</Button>
+              <div className="flex flex-col-reverse gap-2 sm:flex-row">
+                <Button type="button" variant="outline" disabled={saving} onClick={() => setEditOpen(false)}>Cancelar</Button>
+                <Button type="submit" disabled={saving} className="bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90]">{saving && <LoaderCircle className="animate-spin" />} {saving ? 'Salvando...' : 'Salvar alterações'}</Button>
+              </div>
+            </DialogFooter>
           </form>}
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <AlertDialogContent className="border-0 bg-[#fffbff]">
+          <AlertDialogHeader>
+            <AlertDialogMedia className={deleteBlockers.length ? 'bg-[#f7e8d9] text-[#a05b31]' : 'bg-[#f8e3e0] text-[#a94338]'}><Trash2 /></AlertDialogMedia>
+            <AlertDialogTitle className="font-heading font-extrabold">{deleteBlockers.length ? 'Não é possível apagar' : editing?.planType === 'single' ? 'Apagar banho avulso?' : 'Apagar o plano inteiro?'}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteBlockers.length
+                ? `Existe impedimento: ${deleteBlockers.join(' e ')}. Reabra os banhos concluídos e desmarque o pagamento antes de apagar.`
+                : editing?.planType === 'single'
+                  ? `O banho de ${editing.dogName || editing.ownerName || 'cliente sem nome'} será apagado. Esta ação não pode ser desfeita.`
+                  : `Todos os ${editingPlan.length} banhos do plano de ${editing?.dogName || editing?.ownerName || 'cliente sem nome'} serão apagados. Esta ação não pode ser desfeita.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={saving}>{deleteBlockers.length ? 'Entendi' : 'Cancelar'}</AlertDialogCancel>
+            {!deleteBlockers.length && <AlertDialogAction disabled={saving} onClick={deleteAppointment} className="bg-[#a94338] font-bold text-white hover:bg-[#92382f]">{saving ? <LoaderCircle className="animate-spin" /> : <Trash2 />} {saving ? 'Apagando...' : 'Apagar definitivamente'}</AlertDialogAction>}
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={teamOpen} onOpenChange={setTeamOpen}>
         <DialogContent className="max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-5 sm:max-w-2xl">
