@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
+import { PwaInstallButton } from '@/components/pwa-install-button';
 
 type PlanType = 'monthly' | 'fortnightly' | 'single';
 type Status = 'scheduled' | 'completed' | 'absent';
@@ -590,6 +591,7 @@ export default function Home() {
             </div>
           </div>
           <div className="flex items-center gap-1.5 sm:gap-2">
+            <PwaInstallButton />
             {currentUser?.role === 'admin' && (
               <>
                 <Button variant="ghost" size="icon" onClick={openLogs} aria-label="Abrir histórico" title="Histórico" className="text-[#685872]"><History /></Button>
