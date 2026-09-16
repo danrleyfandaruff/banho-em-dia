@@ -61,7 +61,7 @@ body {
     width: calc(100% - 1rem) !important;
     max-width: calc(100% - 1rem) !important;
     max-height: calc(100dvh - 1rem - env(safe-area-inset-top) - env(safe-area-inset-bottom)) !important;
-    transform: translate(-50%, -50%) !important;
+    translate: -50% -50% !important;
     border-radius: 1rem !important;
     padding-bottom: max(1rem, env(safe-area-inset-bottom)) !important;
     overflow-y: auto !important;
