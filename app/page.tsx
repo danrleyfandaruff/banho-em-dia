@@ -582,28 +582,28 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-[#f7f3fb] text-[#302638]">
       <header className="sticky top-0 z-20 border-b border-[#e4dced] bg-[#fffbff]/95 backdrop-blur">
-        <div className="mx-auto flex h-20 max-w-[1440px] items-center justify-between px-4 sm:px-6 lg:px-9">
-          <div className="flex items-center gap-3">
-            <span className="grid h-10 w-10 place-items-center rounded-xl bg-[#7353a6] text-white shadow-sm"><PawPrint size={21} strokeWidth={2.2} /></span>
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#85768f]">Pet shop</p>
-              <h1 className="font-heading text-lg font-extrabold tracking-[-0.03em] sm:text-xl">HEIN PET SALON</h1>
+        <div className="mx-auto flex min-h-16 max-w-[1440px] items-center justify-between gap-2 px-3 py-2.5 sm:h-20 sm:px-6 sm:py-0 lg:px-9">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#7353a6] text-white shadow-sm sm:h-10 sm:w-10"><PawPrint size={20} strokeWidth={2.2} /></span>
+            <div className="min-w-0">
+              <p className="hidden text-[10px] font-bold uppercase tracking-[0.16em] text-[#85768f] sm:block">Pet shop</p>
+              <h1 className="truncate font-heading text-base font-extrabold tracking-[-0.03em] sm:text-xl"><span className="sm:hidden">HEIN PET</span><span className="hidden sm:inline">HEIN PET SALON</span></h1>
             </div>
           </div>
-          <div className="flex items-center gap-1.5 sm:gap-2">
+          <div className="flex shrink-0 items-center gap-0.5 sm:gap-2">
             <PwaInstallButton />
             {currentUser?.role === 'admin' && (
               <>
-                <Button variant="ghost" size="icon" onClick={openLogs} aria-label="Abrir histórico" title="Histórico" className="text-[#685872]"><History /></Button>
-                <Button variant="ghost" size="icon" onClick={openTeam} aria-label="Gerenciar equipe" title="Equipe" className="text-[#685872]"><Users /></Button>
+                <Button variant="ghost" size="icon-sm" onClick={openLogs} aria-label="Abrir histórico" title="Histórico" className="text-[#685872] sm:h-9 sm:w-9"><History /></Button>
+                <Button variant="ghost" size="icon-sm" onClick={openTeam} aria-label="Gerenciar equipe" title="Equipe" className="text-[#685872] sm:h-9 sm:w-9"><Users /></Button>
               </>
             )}
             <div className="hidden text-right md:block">
               <p className="max-w-36 truncate text-xs font-extrabold">{currentUser?.name}</p>
               <p className="text-[10px] font-semibold text-[#8b7c95]">{currentUser?.role === 'admin' ? 'Administrador' : 'Equipe'}</p>
             </div>
-            <a href="/signout-with-chatgpt?return_to=%2F" target="_top" aria-label="Sair" title="Sair" className="grid h-9 w-9 place-items-center rounded-lg text-[#7f7189] transition hover:bg-[#eee7f5]"><LogOut size={17} /></a>
-            <Button onClick={() => openNew()} className="h-11 rounded-xl bg-[#9b6bc2] px-3.5 font-bold text-white shadow-[0_5px_16px_rgba(115,83,166,0.24)] hover:bg-[#8254a8] sm:px-4">
+            <a href="/signout-with-chatgpt?return_to=%2F" target="_top" aria-label="Sair" title="Sair" className="grid h-8 w-8 place-items-center rounded-lg text-[#7f7189] transition hover:bg-[#eee7f5] sm:h-9 sm:w-9"><LogOut size={17} /></a>
+            <Button onClick={() => openNew()} className="h-10 rounded-xl bg-[#9b6bc2] px-2.5 font-bold text-white shadow-[0_5px_16px_rgba(115,83,166,0.24)] hover:bg-[#8254a8] sm:h-11 sm:px-4">
               <Plus /> <span className="hidden sm:inline">Novo agendamento</span><span className="sm:hidden">Novo</span>
             </Button>
           </div>
@@ -611,28 +611,28 @@ export default function Home() {
       </header>
 
       {saving && (
-        <div role="status" aria-live="polite" className="fixed right-4 top-24 z-[70] flex items-center gap-2 rounded-xl bg-[#7353a6] px-4 py-3 text-sm font-bold text-white shadow-xl">
+        <div role="status" aria-live="polite" className="fixed right-3 left-3 top-20 z-[70] flex items-center justify-center gap-2 rounded-xl bg-[#7353a6] px-4 py-3 text-sm font-bold text-white shadow-xl sm:right-4 sm:left-auto sm:top-24 sm:justify-start">
           <LoaderCircle className="animate-spin" size={18} /> {loaderMessage}
         </div>
       )}
 
       {notice && !saving && (
-        <div role="status" className="fixed right-4 top-24 z-50 flex items-center gap-2 rounded-xl bg-[#3c3047] px-4 py-3 text-sm font-bold text-white shadow-xl">
+        <div role="status" className="fixed right-3 left-3 top-20 z-50 flex items-center justify-center gap-2 rounded-xl bg-[#3c3047] px-4 py-3 text-sm font-bold text-white shadow-xl sm:right-4 sm:left-auto sm:top-24 sm:justify-start">
           <CheckCircle2 size={17} /> {notice}
         </div>
       )}
 
-      <div className="mx-auto grid max-w-[1440px] gap-7 px-4 py-7 sm:px-6 lg:grid-cols-[minmax(0,1fr)_300px] lg:px-9">
-        <section>
-          <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+      <div className="mx-auto grid max-w-[1440px] gap-5 px-3 py-5 sm:gap-7 sm:px-6 sm:py-7 lg:grid-cols-[minmax(0,1fr)_300px] lg:px-9">
+        <section className="min-w-0">
+          <div className="mb-5 flex flex-wrap items-end justify-between gap-3 sm:mb-6 sm:gap-4">
             <div>
               <p className="mb-1 text-sm font-semibold text-[#86778f]">Agenda mensal</p>
               <h2 className="font-heading text-[30px] font-extrabold capitalize tracking-[-0.045em] sm:text-[34px]">{prettyMonth(selectedMonth)}</h2>
               <p className="mt-1 hidden text-xs font-semibold text-[#92849c] sm:block">Arraste pelo ícone <GripVertical className="inline" size={14} /> para trocar o dia</p>
             </div>
-            <div className="flex items-center gap-1.5 rounded-xl border border-[#e4dced] bg-white p-1 shadow-sm">
+            <div className="flex w-full items-center justify-between gap-1.5 rounded-xl border border-[#e4dced] bg-white p-1 shadow-sm sm:w-auto">
               <Button variant="ghost" size="icon-sm" onClick={() => setSelectedMonth((month) => addMonths(month, -1))} aria-label="Mês anterior" title="Mês anterior"><ChevronLeft /></Button>
-              <button type="button" onClick={() => setSelectedMonth(today.slice(0, 7))} className="inline-flex h-8 min-w-28 items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-extrabold capitalize text-[#62556c] transition hover:bg-[#f1ecf7] sm:min-w-36"><CalendarDays size={15} /> {selectedMonth === today.slice(0, 7) ? 'Este mês' : 'Voltar para hoje'}</button>
+              <button type="button" onClick={() => setSelectedMonth(today.slice(0, 7))} className="inline-flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-extrabold capitalize text-[#62556c] transition hover:bg-[#f1ecf7] sm:min-w-36 sm:flex-none"><CalendarDays size={15} /> {selectedMonth === today.slice(0, 7) ? 'Este mês' : 'Voltar para hoje'}</button>
               <Button variant="ghost" size="icon-sm" onClick={() => setSelectedMonth((month) => addMonths(month, 1))} aria-label="Próximo mês" title="Próximo mês"><ChevronRight /></Button>
             </div>
           </div>
@@ -640,21 +640,21 @@ export default function Home() {
           <Button
             type="button"
             onClick={() => setTodayOpen(true)}
-            className="mb-6 h-auto w-full justify-between gap-4 rounded-2xl border border-[#cdbce0] bg-[#7353a6] p-4 text-left text-white shadow-[0_10px_28px_rgba(115,83,166,0.22)] hover:bg-[#684999] sm:p-5"
+            className="mb-5 h-auto w-full justify-between gap-2 rounded-2xl border border-[#cdbce0] bg-[#7353a6] p-3 text-left text-white shadow-[0_10px_28px_rgba(115,83,166,0.22)] hover:bg-[#684999] sm:mb-6 sm:gap-4 sm:p-5"
           >
             <span className="flex min-w-0 items-center gap-3 sm:gap-4">
-              <span className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-white/15 font-heading text-2xl font-extrabold sm:h-16 sm:w-16 sm:text-3xl">{Number(today.slice(-2))}</span>
+              <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-white/15 font-heading text-xl font-extrabold sm:h-16 sm:w-16 sm:rounded-2xl sm:text-3xl">{Number(today.slice(-2))}</span>
               <span className="min-w-0">
                 <span className="block text-xs font-extrabold uppercase tracking-[0.14em] text-[#e8dcf3]">Agenda de hoje</span>
                 <span className="mt-1 block truncate font-heading text-lg font-extrabold capitalize sm:text-xl">{prettyDate(today)}</span>
-                <span className="mt-1 block text-xs font-semibold text-[#eadff4]">Toque para ver e atualizar os atendimentos</span>
+                <span className="mt-1 hidden text-xs font-semibold text-[#eadff4] sm:block">Toque para ver e atualizar os atendimentos</span>
               </span>
             </span>
             <span className="flex shrink-0 items-center gap-2 sm:gap-4">
               <span className="text-center"><strong className="block font-heading text-2xl font-extrabold">{todayAppointments.length}</strong><small className="text-[10px] font-bold text-[#e8dcf3]">total</small></span>
               <span className="hidden text-center sm:block"><strong className="block font-heading text-2xl font-extrabold">{todayAppointments.filter((item) => item.status === 'scheduled').length}</strong><small className="text-[10px] font-bold text-[#e8dcf3]">em aberto</small></span>
               <span className="hidden text-center sm:block"><strong className="block font-heading text-2xl font-extrabold">{todayAppointments.filter((item) => item.status === 'completed').length}</strong><small className="text-[10px] font-bold text-[#e8dcf3]">concluídos</small></span>
-              <ChevronRight className="ml-1" size={22} />
+              <ChevronRight className="ml-0 sm:ml-1" size={20} />
             </span>
           </Button>
 
@@ -680,12 +680,12 @@ export default function Home() {
                         : 'border-[#e4dced]'
                     }`}
                   >
-                    <div className="flex items-center justify-between border-b border-[#ede6f2] px-4 py-3.5 sm:px-5">
-                      <div className="flex flex-wrap items-baseline gap-2.5">
+                    <div className="flex items-start justify-between gap-3 border-b border-[#ede6f2] px-3.5 py-3 sm:items-center sm:px-5 sm:py-3.5">
+                      <div className="min-w-0 sm:flex sm:flex-wrap sm:items-baseline sm:gap-2.5">
                         <h3 className={`font-heading text-lg font-extrabold ${date === today ? 'text-[#7353a6]' : ''}`}>{date === today ? 'Hoje' : date === addDays(today, 1) ? 'Amanhã' : prettyDate(date).split(',')[0]}</h3>
-                        <span className="text-sm font-medium capitalize text-[#81748a]">{prettyDate(date)}</span>
+                        <span className="block truncate text-xs font-medium capitalize text-[#81748a] sm:inline sm:text-sm">{prettyDate(date)}</span>
                       </div>
-                      <span className="rounded-full bg-[#f1edf5] px-2.5 py-1 text-xs font-bold text-[#776a80]">{dayAppointments.length} {dayAppointments.length === 1 ? 'dog' : 'dogs'}</span>
+                      <span className="shrink-0 rounded-full bg-[#f1edf5] px-2.5 py-1 text-xs font-bold text-[#776a80]">{dayAppointments.length} {dayAppointments.length === 1 ? 'dog' : 'dogs'}</span>
                     </div>
 
                     {dayAppointments.length ? (
@@ -700,7 +700,7 @@ export default function Home() {
                             <div
                               key={item.id}
                               data-appointment-card
-                              className={`relative grid gap-4 py-4 pr-4 pl-10 transition hover:bg-white sm:grid-cols-[62px_minmax(0,1fr)_auto] sm:items-center sm:pr-5 sm:pl-11 ${item.status !== 'scheduled' ? 'bg-[#faf7fc]' : ''} ${draggingId === item.id ? 'opacity-45' : ''}`}
+                              className={`relative grid gap-3 px-3.5 py-4 transition hover:bg-white sm:grid-cols-[62px_minmax(0,1fr)_auto] sm:items-center sm:gap-4 sm:pr-5 sm:pl-11 ${item.status !== 'scheduled' ? 'bg-[#faf7fc]' : ''} ${draggingId === item.id ? 'opacity-45' : ''}`}
                             >
                               <button
                                 type="button"
@@ -710,7 +710,7 @@ export default function Home() {
                                 onDragEnd={() => { setDraggingId(null); setDropTarget(null); }}
                                 aria-label={`Arrastar ${item.dogName || item.ownerName || 'agendamento'} para outro dia`}
                                 title="Arraste para outro dia"
-                                className="absolute left-1.5 top-1/2 grid h-10 w-7 -translate-y-1/2 cursor-grab place-items-center rounded-lg text-[#9b8ca5] transition hover:bg-[#eee7f5] hover:text-[#7353a6] active:cursor-grabbing"
+                                className="absolute left-1.5 top-1/2 hidden h-10 w-7 -translate-y-1/2 cursor-grab place-items-center rounded-lg text-[#9b8ca5] transition hover:bg-[#eee7f5] hover:text-[#7353a6] active:cursor-grabbing sm:grid"
                               >
                                 <GripVertical size={18} />
                               </button>
@@ -722,7 +722,7 @@ export default function Home() {
                                   <div className="mr-1">
                                     <button onClick={() => openEdit(item)} className="group/name flex items-center gap-1.5 text-left">
                                       <h4 className="font-heading text-base font-extrabold tracking-[-0.02em]">{item.dogName || 'Cachorro sem nome'}</h4>
-                                      <Pencil size={12} className="text-[#9b8ca5] opacity-0 transition group-hover/name:opacity-100" />
+                                      <Pencil size={13} className="text-[#9b8ca5] sm:opacity-0 sm:transition sm:group-hover/name:opacity-100" />
                                     </button>
                                     {item.ownerName && <p className="text-[11px] font-semibold text-[#92849c]">Dono: {item.ownerName}</p>}
                                     {item.cpf && <p className="text-[10px] font-semibold text-[#9b8ca5]">CPF: {item.cpf}</p>}
@@ -754,20 +754,23 @@ export default function Home() {
                                 <p className="flex flex-wrap items-center gap-x-1.5 text-sm text-[#7d7087]"><Scissors size={14} /> {item.services.length ? item.services.join(' · ') : 'Sem serviços definidos'}</p>
                                 {item.planType !== 'single' && <p className="mt-1.5 text-[11px] font-semibold text-[#92849c]">{stats.completed} concluídas · {stats.absent} faltas</p>}
                               </div>
-                              <div className="flex flex-wrap items-center gap-1.5 sm:justify-end">
-                                <Button disabled={saving} aria-label="Mover para o dia anterior" title="Mover para o dia anterior" variant="ghost" size="icon-sm" onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, -1) }, 'Movido para o dia anterior')}><ChevronLeft /></Button>
-                                <Button disabled={saving} aria-label="Mover para o próximo dia" title="Mover para o próximo dia" variant="ghost" size="icon-sm" onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, 1) }, 'Movido para o próximo dia')}><ChevronRight /></Button>
-                                {item.planType !== 'single' && <Button disabled={saving} variant="outline" onClick={() => openPlan(item)} className="h-9 px-2.5 text-xs font-bold text-[#7353a6]"><ListChecks /> Ver plano</Button>}
-                                <Button disabled={saving} variant="outline" onClick={() => openDelete(item)} className="h-9 border-[#ead0cc] px-2.5 text-xs font-bold text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f]"><Trash2 /> {item.planType === 'single' ? 'Apagar banho' : 'Apagar plano'}</Button>
+                              <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center sm:justify-end sm:gap-1.5">
+                                <div className="col-span-2 flex items-center gap-1 sm:contents">
+                                  <Button disabled={saving} aria-label="Mover para o dia anterior" title="Mover para o dia anterior" variant="ghost" size="icon-sm" onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, -1) }, 'Movido para o dia anterior')} className="h-10 w-10 border border-[#ebe4f0] sm:h-8 sm:w-8 sm:border-0"><ChevronLeft /></Button>
+                                  <Button disabled={saving} aria-label="Mover para o próximo dia" title="Mover para o próximo dia" variant="ghost" size="icon-sm" onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, 1) }, 'Movido para o próximo dia')} className="h-10 w-10 border border-[#ebe4f0] sm:h-8 sm:w-8 sm:border-0"><ChevronRight /></Button>
+                                  <span className="ml-1 text-xs font-semibold text-[#92849c] sm:hidden">Mover dia</span>
+                                </div>
+                                {item.planType !== 'single' && <Button disabled={saving} variant="outline" onClick={() => openPlan(item)} className="h-11 w-full px-2.5 text-xs font-bold text-[#7353a6] sm:h-9 sm:w-auto"><ListChecks /> Ver plano</Button>}
+                                <Button disabled={saving} variant="outline" onClick={() => openDelete(item)} className="h-11 w-full border-[#ead0cc] px-2.5 text-xs font-bold text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f] sm:h-9 sm:w-auto"><Trash2 /> {item.planType === 'single' ? 'Apagar banho' : 'Apagar plano'}</Button>
                                 {isRenewable ? (
-                                  <Button disabled={saving} onClick={() => mutate({ action: 'renew', groupId: item.groupId }, 'Plano renovado mantendo o mesmo dia')} className="h-9 bg-[#9b6bc2] px-3 text-xs font-bold text-white hover:bg-[#8254a8]"><RefreshCw /> Renovar</Button>
+                                  <Button disabled={saving} onClick={() => mutate({ action: 'renew', groupId: item.groupId }, 'Plano renovado mantendo o mesmo dia')} className="h-11 w-full bg-[#9b6bc2] px-3 text-xs font-bold text-white hover:bg-[#8254a8] sm:h-9 sm:w-auto"><RefreshCw /> Renovar</Button>
                                 ) : item.status === 'scheduled' ? (
                                   <>
-                                    <Button disabled={saving} variant="outline" onClick={() => mutate({ action: 'status', id: item.id, status: 'absent' }, 'Falta registrada')} className="h-9 px-2.5 text-xs font-bold text-[#93503f]"><X /> Falta</Button>
-                                    <Button disabled={saving} onClick={() => mutate({ action: 'status', id: item.id, status: 'completed' }, 'Atendimento concluído')} className="h-9 bg-[#7353a6] px-3 text-xs font-bold text-white hover:bg-[#5e3f90]"><Check /> Concluir</Button>
+                                    <Button disabled={saving} variant="outline" onClick={() => mutate({ action: 'status', id: item.id, status: 'absent' }, 'Falta registrada')} className="h-11 w-full px-2.5 text-xs font-bold text-[#93503f] sm:h-9 sm:w-auto"><X /> Falta</Button>
+                                    <Button disabled={saving} onClick={() => mutate({ action: 'status', id: item.id, status: 'completed' }, 'Atendimento concluído')} className="h-11 w-full bg-[#7353a6] px-3 text-xs font-bold text-white hover:bg-[#5e3f90] sm:h-9 sm:w-auto"><Check /> Concluir</Button>
                                   </>
                                 ) : (
-                                  <Button disabled={saving} variant="ghost" onClick={() => mutate({ action: 'status', id: item.id, status: 'scheduled' }, 'Atendimento reaberto')} className="h-9 px-2.5 text-xs font-bold text-[#76687f]">{item.status === 'completed' ? 'Concluído' : 'Faltou'} · reabrir</Button>
+                                  <Button disabled={saving} variant="ghost" onClick={() => mutate({ action: 'status', id: item.id, status: 'scheduled' }, 'Atendimento reaberto')} className="col-span-2 h-11 w-full px-2.5 text-xs font-bold text-[#76687f] sm:h-9 sm:w-auto">{item.status === 'completed' ? 'Concluído' : 'Faltou'} · reabrir</Button>
                                 )}
                               </div>
                             </div>
@@ -822,7 +825,7 @@ export default function Home() {
       </div>
 
       <Dialog open={todayOpen} onOpenChange={setTodayOpen}>
-        <DialogContent className="max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-5 sm:max-w-2xl">
+        <DialogContent className="mobile-sheet max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-4 sm:max-w-2xl sm:p-5">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><CalendarDays className="text-[#7353a6]" /> Atendimentos de hoje</DialogTitle>
             <DialogDescription className="capitalize">{prettyDate(today)} · {todayAppointments.length} {todayAppointments.length === 1 ? 'atendimento' : 'atendimentos'}</DialogDescription>
@@ -850,17 +853,17 @@ export default function Home() {
                     <span className={`rounded-full px-2.5 py-1 text-[11px] font-extrabold ${item.status === 'completed' ? 'bg-[#e8f4eb] text-[#4f765c]' : item.status === 'absent' ? 'bg-[#f7e7e2] text-[#ad533d]' : 'bg-[#f1edf5] text-[#776a80]'}`}>{statusLabels[item.status]}</span>
                   </div>
                   <p className="mt-3 flex flex-wrap items-center gap-x-1.5 text-xs text-[#7d7087]"><Scissors size={13} /> {item.services.length ? item.services.join(' · ') : 'Sem serviços definidos'}</p>
-                  <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-[#eee8f3] pt-3">
-                    {item.whatsapp && <a href={whatsappUrl(item.whatsapp)} target="_blank" rel="noreferrer" className="grid h-8 w-8 place-items-center rounded-lg bg-[#e6f7eb] text-[#1e8b4c]" aria-label="Abrir WhatsApp"><MessageCircle size={16} /></a>}
-                    <Button disabled={saving} variant="outline" size="sm" onClick={() => editFromOverview(item)}><Pencil /> Editar</Button>
-                    {item.planType !== 'single' && <Button disabled={saving} variant="outline" size="sm" onClick={() => openPlanFromToday(item)} className="text-[#7353a6]"><ListChecks /> Ver plano</Button>}
+                  <div className="mt-3 grid grid-cols-2 gap-2 border-t border-[#eee8f3] pt-3 sm:flex sm:flex-wrap sm:items-center sm:gap-1.5">
+                    {item.whatsapp && <a href={whatsappUrl(item.whatsapp)} target="_blank" rel="noreferrer" className="flex h-11 items-center justify-center gap-2 rounded-lg bg-[#e6f7eb] px-3 text-xs font-bold text-[#1e8b4c] sm:grid sm:h-8 sm:w-8 sm:p-0" aria-label="Abrir WhatsApp"><MessageCircle size={16} /><span className="sm:hidden">WhatsApp</span></a>}
+                    <Button disabled={saving} variant="outline" size="sm" onClick={() => editFromOverview(item)} className="h-11 w-full sm:h-8 sm:w-auto"><Pencil /> Editar</Button>
+                    {item.planType !== 'single' && <Button disabled={saving} variant="outline" size="sm" onClick={() => openPlanFromToday(item)} className="h-11 w-full text-[#7353a6] sm:h-8 sm:w-auto"><ListChecks /> Ver plano</Button>}
                     {item.status === 'scheduled' ? (
                       <>
-                        <Button disabled={saving} variant="outline" size="sm" onClick={() => mutate({ action: 'status', id: item.id, status: 'absent' }, 'Falta registrada')} className="text-[#93503f]"><X /> Falta</Button>
-                        <Button disabled={saving} size="sm" onClick={() => mutate({ action: 'status', id: item.id, status: 'completed' }, 'Atendimento concluído')} className="bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90]"><Check /> Concluir</Button>
+                        <Button disabled={saving} variant="outline" size="sm" onClick={() => mutate({ action: 'status', id: item.id, status: 'absent' }, 'Falta registrada')} className="h-11 w-full text-[#93503f] sm:h-8 sm:w-auto"><X /> Falta</Button>
+                        <Button disabled={saving} size="sm" onClick={() => mutate({ action: 'status', id: item.id, status: 'completed' }, 'Atendimento concluído')} className="h-11 w-full bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90] sm:h-8 sm:w-auto"><Check /> Concluir</Button>
                       </>
                     ) : (
-                      <Button disabled={saving} variant="ghost" size="sm" onClick={() => mutate({ action: 'status', id: item.id, status: 'scheduled' }, 'Atendimento reaberto')} className="font-bold text-[#76687f]">Reabrir</Button>
+                      <Button disabled={saving} variant="ghost" size="sm" onClick={() => mutate({ action: 'status', id: item.id, status: 'scheduled' }, 'Atendimento reaberto')} className="h-11 w-full font-bold text-[#76687f] sm:h-8 sm:w-auto">Reabrir</Button>
                     )}
                   </div>
                 </article>
@@ -874,14 +877,14 @@ export default function Home() {
               <Button onClick={() => { setTodayOpen(false); openNew(today); }} className="mt-4 bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90]"><Plus /> Novo atendimento</Button>
             </div>
           )}
-          <DialogFooter className="-mx-5 -mb-5 px-5">
+          <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5">
             <Button variant="outline" onClick={() => setTodayOpen(false)}>Fechar</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       <Dialog open={planOpen} onOpenChange={(open) => { if (open) setPlanOpen(true); else closePlan(); }}>
-        <DialogContent className="max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-5 sm:max-w-2xl">
+        <DialogContent className="mobile-sheet max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-4 sm:max-w-2xl sm:p-5">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><ListChecks className="text-[#7353a6]" /> Atendimentos do plano</DialogTitle>
             <DialogDescription>
@@ -903,17 +906,17 @@ export default function Home() {
                   <span>{selectedPlanStats.completed} concluídos</span><span>·</span><span>{selectedPlanStats.absent} faltas</span><span>·</span><span>{selectedPlanStats.scheduled} abertos</span>
                 </div>
               </div>
-              <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-[#e5dced] pt-3">
-                {selectedPlanHead.whatsapp && <a href={whatsappUrl(selectedPlanHead.whatsapp)} target="_blank" rel="noreferrer" className="grid h-9 w-9 place-items-center rounded-lg bg-[#e6f7eb] text-[#1e8b4c]" aria-label="Abrir WhatsApp"><MessageCircle size={17} /></a>}
+              <div className="mt-3 grid grid-cols-2 gap-2 border-t border-[#e5dced] pt-3 sm:flex sm:flex-wrap sm:items-center">
+                {selectedPlanHead.whatsapp && <a href={whatsappUrl(selectedPlanHead.whatsapp)} target="_blank" rel="noreferrer" className="flex h-11 items-center justify-center gap-2 rounded-lg bg-[#e6f7eb] px-3 text-xs font-bold text-[#1e8b4c] sm:grid sm:h-9 sm:w-9 sm:p-0" aria-label="Abrir WhatsApp"><MessageCircle size={17} /><span className="sm:hidden">WhatsApp</span></a>}
                 <Button
                   disabled={saving}
                   variant="outline"
                   onClick={() => updatePaid(selectedPlanHead)}
-                  className={selectedPlanHead.paid ? 'font-bold text-[#568066]' : 'font-bold text-[#c4563c]'}
+                  className={`h-11 w-full sm:h-9 sm:w-auto ${selectedPlanHead.paid ? 'font-bold text-[#568066]' : 'font-bold text-[#c4563c]'}`}
                 >
                   <CircleDollarSign /> {selectedPlanHead.paid ? 'Marcar pendente' : 'Marcar plano pago'}
                 </Button>
-                <Button disabled={saving} variant="outline" onClick={deleteFromPlan} className="border-[#ead0cc] font-bold text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f]"><Trash2 /> Apagar plano</Button>
+                <Button disabled={saving} variant="outline" onClick={deleteFromPlan} className="h-11 w-full border-[#ead0cc] font-bold text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f] sm:h-9 sm:w-auto"><Trash2 /> Apagar plano</Button>
               </div>
             </div>
           )}
@@ -948,24 +951,27 @@ export default function Home() {
                       className="h-9 bg-white"
                     />
                   </label>
-                  <div className="flex flex-wrap items-center gap-1.5 sm:justify-end">
-                    <Button disabled={saving} variant="ghost" size="icon-sm" aria-label="Mover para o dia anterior" title="Mover para o dia anterior" onClick={() => mutate({ action: 'move', id: session.id, scheduledDate: addDays(session.scheduledDate, -1) }, 'Movido para o dia anterior')}><ChevronLeft /></Button>
-                    <Button disabled={saving} variant="ghost" size="icon-sm" aria-label="Mover para o próximo dia" title="Mover para o próximo dia" onClick={() => mutate({ action: 'move', id: session.id, scheduledDate: addDays(session.scheduledDate, 1) }, 'Movido para o próximo dia')}><ChevronRight /></Button>
-                    <Button disabled={saving} variant="outline" size="sm" onClick={() => editFromOverview(session)}><Pencil /> Editar sessão</Button>
+                  <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center sm:justify-end sm:gap-1.5">
+                    <div className="col-span-2 flex items-center gap-1 sm:contents">
+                      <Button disabled={saving} variant="ghost" size="icon-sm" aria-label="Mover para o dia anterior" title="Mover para o dia anterior" onClick={() => mutate({ action: 'move', id: session.id, scheduledDate: addDays(session.scheduledDate, -1) }, 'Movido para o dia anterior')} className="h-10 w-10 border border-[#ebe4f0] sm:h-8 sm:w-8 sm:border-0"><ChevronLeft /></Button>
+                      <Button disabled={saving} variant="ghost" size="icon-sm" aria-label="Mover para o próximo dia" title="Mover para o próximo dia" onClick={() => mutate({ action: 'move', id: session.id, scheduledDate: addDays(session.scheduledDate, 1) }, 'Movido para o próximo dia')} className="h-10 w-10 border border-[#ebe4f0] sm:h-8 sm:w-8 sm:border-0"><ChevronRight /></Button>
+                      <span className="ml-1 text-xs font-semibold text-[#92849c] sm:hidden">Mover dia</span>
+                    </div>
+                    <Button disabled={saving} variant="outline" size="sm" onClick={() => editFromOverview(session)} className="h-11 w-full sm:h-8 sm:w-auto"><Pencil /> Editar sessão</Button>
                     {session.status === 'scheduled' ? (
                       <>
-                        <Button disabled={saving} variant="outline" size="sm" onClick={() => mutate({ action: 'status', id: session.id, status: 'absent' }, 'Falta registrada')} className="text-[#93503f]"><X /> Falta</Button>
-                        <Button disabled={saving} size="sm" onClick={() => mutate({ action: 'status', id: session.id, status: 'completed' }, 'Atendimento concluído')} className="bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90]"><Check /> Concluir</Button>
+                        <Button disabled={saving} variant="outline" size="sm" onClick={() => mutate({ action: 'status', id: session.id, status: 'absent' }, 'Falta registrada')} className="h-11 w-full text-[#93503f] sm:h-8 sm:w-auto"><X /> Falta</Button>
+                        <Button disabled={saving} size="sm" onClick={() => mutate({ action: 'status', id: session.id, status: 'completed' }, 'Atendimento concluído')} className="h-11 w-full bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90] sm:h-8 sm:w-auto"><Check /> Concluir</Button>
                       </>
                     ) : (
-                      <Button disabled={saving} variant="ghost" size="sm" onClick={() => mutate({ action: 'status', id: session.id, status: 'scheduled' }, 'Atendimento reaberto')} className="font-bold text-[#76687f]">Reabrir</Button>
+                      <Button disabled={saving} variant="ghost" size="sm" onClick={() => mutate({ action: 'status', id: session.id, status: 'scheduled' }, 'Atendimento reaberto')} className="h-11 w-full font-bold text-[#76687f] sm:h-8 sm:w-auto">Reabrir</Button>
                     )}
                   </div>
                 </div>
               </article>
             ))}
           </div>
-          <DialogFooter className="-mx-5 -mb-5 px-5">
+          <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5">
             <Button variant="outline" onClick={closePlan}>{planReturnToToday ? 'Voltar para atendimentos de hoje' : 'Fechar'}</Button>
             {selectedPlanIsRenewable && selectedPlanHead && (
               <Button
@@ -991,7 +997,7 @@ export default function Home() {
         setPaymentOpen(open);
         if (!open) setPaymentTarget(null);
       }}>
-        <DialogContent className="border-0 bg-[#fffbff] p-5 sm:max-w-md">
+        <DialogContent className="mobile-sheet border-0 bg-[#fffbff] p-4 sm:max-w-md sm:p-5">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><CircleDollarSign className="text-[#7353a6]" /> {paymentTarget?.paid ? 'Alterar forma de pagamento' : 'Confirmar pagamento'}</DialogTitle>
             <DialogDescription>
@@ -1012,12 +1018,12 @@ export default function Home() {
               </Button>
             ))}
           </div>
-          <DialogFooter className="-mx-5 -mb-5 px-5"><Button type="button" variant="outline" disabled={saving} onClick={() => setPaymentOpen(false)}>Cancelar</Button></DialogFooter>
+          <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5"><Button type="button" variant="outline" disabled={saving} onClick={() => setPaymentOpen(false)}>Cancelar</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
       <Dialog open={newOpen} onOpenChange={setNewOpen}>
-        <DialogContent className="max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-5 sm:max-w-xl">
+        <DialogContent className="mobile-sheet max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-4 sm:max-w-xl sm:p-5">
           <DialogHeader>
             <DialogTitle className="font-heading text-xl font-extrabold tracking-[-0.03em]">Novo agendamento</DialogTitle>
             <DialogDescription>Cadastre o plano e o primeiro banho. Os próximos entram sozinhos no mesmo dia da semana.</DialogDescription>
@@ -1033,7 +1039,7 @@ export default function Home() {
             </div>
             <div>
               <span className="mb-2 block text-xs font-bold text-[#6f6179]">Tipo de plano</span>
-              <div className="grid gap-2 sm:grid-cols-3">
+              <div className="grid grid-cols-3 gap-2">
                 {(Object.keys(planLabels) as PlanType[]).map((plan) => (
                   <button
                     type="button"
@@ -1050,9 +1056,9 @@ export default function Home() {
                       });
                       setActiveServiceSession(0);
                     }}
-                    className={`rounded-xl border p-3 text-left transition ${form.planType === plan ? 'border-[#7353a6] bg-[#eee6f7] ring-1 ring-[#7353a6]' : 'border-[#e4dced] bg-white hover:border-[#bbaacd]'}`}
+                    className={`rounded-xl border p-2.5 text-left transition sm:p-3 ${form.planType === plan ? 'border-[#7353a6] bg-[#eee6f7] ring-1 ring-[#7353a6]' : 'border-[#e4dced] bg-white hover:border-[#bbaacd]'}`}
                   >
-                    <strong className="block text-sm">{planLabels[plan]}</strong><span className="mt-1 block text-[11px] text-[#81748a]">{planDescriptions[plan]}</span>
+                    <strong className="block text-xs sm:text-sm">{planLabels[plan]}</strong><span className="mt-1 block text-[10px] leading-4 text-[#81748a] sm:text-[11px]">{planDescriptions[plan]}</span>
                   </button>
                 ))}
               </div>
@@ -1111,7 +1117,7 @@ export default function Home() {
                 <label className="mt-3 block border-t border-[#eee8f3] pt-3"><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><CreditCard size={14} /> Como foi pago?</span><select required value={form.paymentMethod} onChange={(event) => setForm({ ...form, paymentMethod: event.target.value as PaymentMethod })} className="h-11 w-full rounded-md border border-input bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#7353a6]/30"><option value="">Escolha a forma de pagamento</option><option value="pix">Pix</option><option value="cash">Dinheiro</option><option value="debit">Cartão de débito</option><option value="credit">Cartão de crédito</option></select></label>
               )}
             </div>
-            <DialogFooter className="-mx-5 -mb-5 px-5">
+            <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5">
               <Button type="button" variant="outline" onClick={() => setNewOpen(false)}>Cancelar</Button>
               <Button type="submit" disabled={saving} className="bg-[#9b6bc2] font-bold text-white hover:bg-[#8254a8]">{saving ? <LoaderCircle className="animate-spin" /> : <Sparkles />} {saving ? 'Salvando...' : 'Criar agendamento'}</Button>
             </DialogFooter>
@@ -1120,7 +1126,7 @@ export default function Home() {
       </Dialog>
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-5 sm:max-w-lg">
+        <DialogContent className="mobile-sheet max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-4 sm:max-w-lg sm:p-5">
           <DialogHeader><DialogTitle className="font-heading text-xl font-extrabold">Editar atendimento</DialogTitle><DialogDescription>{editing?.planType === 'single' ? 'Altere os detalhes deste atendimento.' : 'Ao mudar a data, as próximas sessões do plano acompanham automaticamente.'}</DialogDescription></DialogHeader>
           {editing && <form onSubmit={saveEdit} className="space-y-5">
             <div className="grid gap-3 sm:grid-cols-2">
@@ -1137,7 +1143,7 @@ export default function Home() {
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Valor (opcional)</span><Input inputMode="numeric" value={formatMoney(editing.amountCents) ?? ''} onChange={(event) => setEditing({ ...editing, amountCents: realToCents(event.target.value) })} placeholder="R$ 0,00" className="h-11 bg-white font-semibold tabular-nums" /></label>
             </div>
             <div><span className="mb-2 block text-xs font-bold text-[#6f6179]">O que é para fazer</span><div className="flex flex-wrap gap-2">{serviceOptions.map((service) => <button type="button" key={service} onClick={() => toggleService(service, true)} className={`rounded-full border px-3 py-2 text-xs font-bold ${editing.services.includes(service) ? 'border-[#7353a6] bg-[#7353a6] text-white' : 'border-[#e4dced] bg-white text-[#6f6179]'}`}>{service}</button>)}</div></div>
-            <DialogFooter className="-mx-5 -mb-5 px-5 sm:justify-between">
+            <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:justify-between sm:px-5">
               <Button type="button" variant="outline" disabled={saving} onClick={() => setDeleteOpen(true)} className="border-[#ead0cc] text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f]"><Trash2 /> {editing.planType === 'single' ? 'Apagar banho' : 'Apagar plano'}</Button>
               <div className="flex flex-col-reverse gap-2 sm:flex-row">
                 <Button type="button" variant="outline" disabled={saving} onClick={() => setEditOpen(false)}>Cancelar</Button>
@@ -1149,7 +1155,7 @@ export default function Home() {
       </Dialog>
 
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <AlertDialogContent className="border-0 bg-[#fffbff]">
+        <AlertDialogContent className="mobile-alert max-w-[calc(100%-1.5rem)] border-0 bg-[#fffbff]">
           <AlertDialogHeader>
             <AlertDialogMedia className={deleteBlockers.length ? 'bg-[#f7e8d9] text-[#a05b31]' : 'bg-[#f8e3e0] text-[#a94338]'}><Trash2 /></AlertDialogMedia>
             <AlertDialogTitle className="font-heading font-extrabold">{deleteBlockers.length ? 'Não é possível apagar' : editing?.planType === 'single' ? 'Apagar banho avulso?' : 'Apagar o plano inteiro?'}</AlertDialogTitle>
@@ -1169,7 +1175,7 @@ export default function Home() {
       </AlertDialog>
 
       <Dialog open={teamOpen} onOpenChange={setTeamOpen}>
-        <DialogContent className="max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-5 sm:max-w-2xl">
+        <DialogContent className="mobile-sheet max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-4 sm:max-w-2xl sm:p-5">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><Users className="text-[#7353a6]" /> Equipe e acessos</DialogTitle>
             <DialogDescription>Cadastre o e-mail usado na conta do ChatGPT. A pessoa entra pelo mesmo endereço do sistema.</DialogDescription>
@@ -1201,12 +1207,12 @@ export default function Home() {
               </div>
             ))}
           </div>
-          <DialogFooter className="-mx-5 -mb-5 px-5"><Button variant="outline" onClick={() => setTeamOpen(false)}>Fechar</Button></DialogFooter>
+          <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5"><Button variant="outline" onClick={() => setTeamOpen(false)}>Fechar</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
       <Dialog open={logsOpen} onOpenChange={setLogsOpen}>
-        <DialogContent className="max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-5 sm:max-w-2xl">
+        <DialogContent className="mobile-sheet max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-4 sm:max-w-2xl sm:p-5">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><Activity className="text-[#7353a6]" /> Histórico de atividades</DialogTitle>
             <DialogDescription>Últimas alterações feitas pela equipe na agenda e nos acessos.</DialogDescription>
@@ -1226,7 +1232,7 @@ export default function Home() {
               </div>
             ))}
           </div>
-          <DialogFooter className="-mx-5 -mb-5 px-5"><Button variant="outline" onClick={() => setLogsOpen(false)}>Fechar</Button></DialogFooter>
+          <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5"><Button variant="outline" onClick={() => setLogsOpen(false)}>Fechar</Button></DialogFooter>
         </DialogContent>
       </Dialog>
     </main>

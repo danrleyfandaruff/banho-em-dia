@@ -50,6 +50,47 @@
 
 body {
   font-family: var(--font-manrope), Arial, Helvetica, sans-serif;
+  overflow-x: hidden;
+}
+
+@media (max-width: 639px) {
+  .mobile-sheet {
+    top: auto !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 94dvh !important;
+    transform: none !important;
+    border-bottom-right-radius: 0 !important;
+    border-bottom-left-radius: 0 !important;
+    border-top-left-radius: 1.25rem !important;
+    border-top-right-radius: 1.25rem !important;
+    padding-bottom: max(1rem, env(safe-area-inset-bottom)) !important;
+    overscroll-behavior-y: contain;
+  }
+
+  .mobile-sheet [data-slot='dialog-title'] {
+    padding-right: 2.25rem;
+    line-height: 1.25;
+  }
+
+  .mobile-sheet [data-slot='dialog-footer'] {
+    position: sticky;
+    bottom: calc(-1rem - env(safe-area-inset-bottom));
+    z-index: 5;
+  }
+
+  .mobile-alert {
+    max-height: 90dvh;
+    overflow-y: auto;
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
 }
 
 :root {
