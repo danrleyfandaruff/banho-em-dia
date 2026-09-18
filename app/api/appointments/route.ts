@@ -224,6 +224,22 @@ export async function POST(request: Request) {
     );
   }
 
+  if (action === 'complete_day') {
+    const date = String(body.scheduledDate ?? '');
+    const ids = Array.isArray(body.ids) ? [...new Set(body.ids.filter((id): id is string => typeof id === 'string'))] : [];
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !ids.length) {
+      return Response.json({ error: 'invalid_selection' }, { status: 400 });
+    }
+    // Scope the update by both date and status, even if a selection has become stale.
+    const completed = await db.prepare(`UPDATE appointments SET status = 'completed'
+      WHERE scheduled_date = ? AND status = 'scheduled'
+      AND id IN (SELECT value FROM json_each(?)) RETURNING id`)
+      .bind(date, JSON.stringify(ids)).all<{ id: string }>();
+    await writeAudit(auth.user, 'appointments_completed', 'appointment_day', date,
+      `Concluiu ${completed.results.length} banho(s) do dia ${date}`,
+      { scheduledDate: date, ids: completed.results.map((item) => item.id) });
+  }
+
   if (action === 'status') {
     const target = await db.prepare('SELECT * FROM appointments WHERE id = ?')
       .bind(String(body.id ?? ''))

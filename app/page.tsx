@@ -1,16 +1,16 @@
 'use client';
 
-import { DragEvent, FormEvent, useEffect, useMemo, useState } from 'react';
+import { ComponentProps, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight,
   CircleDollarSign, Clock3, CreditCard, Dog, GripVertical, History, IdCard, ListChecks, LoaderCircle, LogOut,
   MessageCircle, PawPrint, Pencil, Plus, RefreshCw, Scissors, ShieldCheck,
   Sparkles, Trash2, UserPlus, UserRound, Users, X,
 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Button as BaseButton } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialog, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogMedia,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
@@ -24,6 +24,28 @@ import { PwaInstallButton } from '@/components/pwa-install-button';
 type PlanType = 'monthly' | 'fortnightly' | 'single';
 type Status = 'scheduled' | 'completed' | 'absent';
 type PaymentMethod = '' | 'pix' | 'cash' | 'debit' | 'credit';
+
+// Keep feedback on the button that started the action, including queued saves.
+function Button({ onClick, children, disabled, className, ...props }: ComponentProps<typeof BaseButton>) {
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  return <BaseButton {...props} className={`${className ?? ''} ${busy ? '[&>svg:not(.animate-spin)]:hidden' : ''}`} disabled={disabled || busy} aria-busy={busy || undefined}
+    onClick={async (event) => {
+      if (busyRef.current) return;
+      const result = onClick?.(event) as unknown;
+      if (result && typeof (result as Promise<unknown>).then === 'function') {
+        busyRef.current = true;
+        setBusy(true);
+        try { await result; } finally { busyRef.current = false; setBusy(false); }
+      }
+    }}>
+    {busy && <LoaderCircle className="animate-spin" aria-label="Salvando" />}{children}
+  </BaseButton>;
+}
+
+const cardColors: Record<Status, string> = {
+  scheduled: 'appointment-open', completed: 'appointment-completed', absent: 'appointment-absent',
+};
 type Appointment = {
   id: string;
   groupId: string;
@@ -177,7 +199,9 @@ export default function Home() {
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [blockedEmail, setBlockedEmail] = useState('');
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [savingForm, setSavingForm] = useState('');
+  const mutationQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [newOpen, setNewOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -192,7 +216,6 @@ export default function Home() {
   const [editing, setEditing] = useState<Appointment | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(() => localDateString().slice(0, 7));
   const [notice, setNotice] = useState('');
-  const [loaderMessage, setLoaderMessage] = useState('Salvando...');
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [teamOpen, setTeamOpen] = useState(false);
@@ -200,6 +223,7 @@ export default function Home() {
   const [teamUsers, setTeamUsers] = useState<TeamUser[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [panelLoading, setPanelLoading] = useState(false);
+  const [teamSaving, setTeamSaving] = useState(false);
   const [newUser, setNewUser] = useState({ name: '', email: '', role: 'staff' as 'admin' | 'staff' });
   const today = localDateString();
 
@@ -207,7 +231,7 @@ export default function Home() {
     async function load() {
       try {
         const sessionResponse = await fetch('/api/session');
-        const session = await sessionResponse.json();
+        const session = await sessionResponse.json() as { user: CurrentUser; email?: string };
         if (!sessionResponse.ok) {
           setAuthStatus(sessionResponse.status === 401 ? 'signed_out' : 'forbidden');
           setBlockedEmail(session.email ?? '');
@@ -217,7 +241,7 @@ export default function Home() {
         setAuthStatus('authorized');
         const response = await fetch('/api/appointments');
         if (!response.ok) throw new Error('request failed');
-        const data = await response.json();
+        const data = await response.json() as { appointments?: Appointment[]; users?: TeamUser[]; logs?: AuditLog[]; error?: string; blockers?: string[]; pendingCount?: number };
         setAppointments(data.appointments ?? []);
       } catch {
         setNotice('Não foi possível carregar a agenda. Tente novamente.');
@@ -269,24 +293,19 @@ export default function Home() {
     editingPlan.some((item) => item.paid) ? 'o pagamento está marcado como pago' : '',
   ].filter(Boolean);
 
-  async function mutate(payload: Record<string, unknown>, message?: string) {
-    const loadingLabels: Record<string, string> = {
-      create: 'Criando agendamento...',
-      edit: 'Salvando alterações...',
-      move: 'Movendo atendimento...',
-      status: 'Atualizando atendimento...',
-      paid: 'Atualizando pagamento...',
-      payment_method: 'Atualizando forma de pagamento...',
-      renew: 'Renovando plano...',
-      delete: 'Apagando agendamento...',
-    };
-    setLoaderMessage(loadingLabels[String(payload.action ?? '')] ?? 'Salvando...');
-    setSaving(true);
+  function mutate(payload: Record<string, unknown>, message?: string): Promise<boolean> {
+    // Responses contain the whole agenda; serialize writes so older snapshots cannot overwrite newer ones.
+    const task = mutationQueue.current.then(() => performMutation(payload, message));
+    mutationQueue.current = task.catch(() => undefined);
+    return task;
+  }
+
+  async function performMutation(payload: Record<string, unknown>, message?: string) {
     try {
       const response = await fetch('/api/appointments', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
       });
-      const data = await response.json();
+      const data = await response.json() as { appointments?: Appointment[]; users?: TeamUser[]; logs?: AuditLog[]; error?: string; blockers?: string[]; pendingCount?: number };
       if (!response.ok) {
         const blockerMessage = Array.isArray(data.blockers)
           ? `Não é possível apagar: ${data.blockers.join(' e ')}.`
@@ -298,6 +317,7 @@ export default function Home() {
         return false;
       }
       setAppointments(data.appointments ?? []);
+      setSelectedIds((ids) => ids.filter((id) => (data.appointments ?? []).some((item) => item.id === id && item.status === 'scheduled')));
       if (message) {
         setNotice(message);
         window.setTimeout(() => setNotice(''), 2600);
@@ -306,9 +326,32 @@ export default function Home() {
     } catch {
       setNotice('Não foi possível salvar. Tente novamente.');
       return false;
-    } finally {
-      setSaving(false);
     }
+  }
+
+  function selectionCheckbox(item: Appointment) {
+    if (item.status !== 'scheduled') return null;
+    return <Checkbox className="size-5" aria-label={`Selecionar ${item.dogName || 'banho'} de ${prettyDate(item.scheduledDate)} às ${item.scheduledTime}`}
+      checked={selectedIds.includes(item.id)}
+      onCheckedChange={(checked) => setSelectedIds((ids) => checked ? [...new Set([...ids, item.id])] : ids.filter((id) => id !== item.id))} />;
+  }
+
+  function dayActions(date: string, items: Appointment[]) {
+    const open = items.filter((item) => item.status === 'scheduled');
+    if (!open.length) return null;
+    const selected = open.filter((item) => selectedIds.includes(item.id));
+    const complete = (ids: string[]) => mutate({ action: 'complete_day', scheduledDate: date, ids }, `${ids.length} ${ids.length === 1 ? 'banho concluído' : 'banhos concluídos'}`);
+    return <div className="flex flex-wrap items-center gap-3 border-b border-[#e4dced] bg-[#f3edf9] px-3.5 py-3 sm:px-5">
+      <label className="flex min-h-10 cursor-pointer items-center gap-2 text-sm font-semibold text-[#624782]">
+        <Checkbox className="size-5" checked={selected.length === open.length} indeterminate={selected.length > 0 && selected.length < open.length}
+          onCheckedChange={(checked) => setSelectedIds((ids) => checked ? [...new Set([...ids, ...open.map((item) => item.id)])] : ids.filter((id) => !open.some((item) => item.id === id)))} />
+        {selected.length ? `${selected.length} selecionado(s)` : `Selecionar os ${open.length} em aberto`}
+      </label>
+      <div className="flex flex-wrap gap-2 sm:ml-auto">
+        {selected.length > 0 && <Button key="selected" className="h-auto min-h-10 whitespace-normal" onClick={() => complete(selected.map((item) => item.id))}><Check /> Concluir selecionados ({selected.length})</Button>}
+        <Button key="all" variant="outline" className="h-auto min-h-10 whitespace-normal" onClick={() => complete(open.map((item) => item.id))}><CheckCircle2 /> Concluir todos ({open.length})</Button>
+      </div>
+    </div>;
   }
 
   function openNew(date = today) {
@@ -334,10 +377,13 @@ export default function Home() {
 
   async function createAppointment(event: FormEvent) {
     event.preventDefault();
+    if (savingForm) return;
+    setSavingForm('create');
     const ok = await mutate({
       action: 'create', ...form,
       amountCents: realToCents(form.amount),
     }, 'Agendamento criado');
+    setSavingForm('');
     if (ok) setNewOpen(false);
   }
 
@@ -388,11 +434,10 @@ export default function Home() {
 
   function updatePaid(item: Appointment) {
     if (item.paid) {
-      mutate(
+      return mutate(
         { action: 'paid', id: item.id, paid: false },
         item.planType === 'single' ? 'Banho marcado como pendente' : 'Plano marcado como pendente',
       );
-      return;
     }
     setPaymentTarget(item);
     setPaymentOpen(true);
@@ -422,13 +467,15 @@ export default function Home() {
 
   async function saveEdit(event: FormEvent) {
     event.preventDefault();
-    if (!editing) return;
+    if (!editing || savingForm) return;
+    setSavingForm('edit');
     const ok = await mutate({
       action: 'edit', id: editing.id, ownerName: editing.ownerName, dogName: editing.dogName,
       whatsapp: editing.whatsapp, cpf: editing.cpf, paymentMethod: editing.paymentMethod,
       scheduledDate: editing.scheduledDate, scheduledTime: editing.scheduledTime,
       services: editing.services, amountCents: editing.amountCents,
     }, editing.planType === 'single' ? 'Atendimento atualizado' : 'Atendimento e próximas sessões atualizados');
+    setSavingForm('');
     if (ok) setEditOpen(false);
   }
 
@@ -462,12 +509,7 @@ export default function Home() {
     const item = appointments.find((appointment) => appointment.id === id);
     if (!item || item.scheduledDate === scheduledDate) return;
 
-    const previous = appointments;
-    setAppointments((current) => current.map((appointment) =>
-      appointment.id === id ? { ...appointment, scheduledDate } : appointment,
-    ));
-    const ok = await mutate({ action: 'move', id, scheduledDate }, `Movido para ${prettyDate(scheduledDate)}`);
-    if (!ok) setAppointments(previous);
+    await mutate({ action: 'move', id, scheduledDate }, `Movido para ${prettyDate(scheduledDate)}`);
   }
 
   async function openTeam() {
@@ -475,7 +517,7 @@ export default function Home() {
     setPanelLoading(true);
     try {
       const response = await fetch('/api/team');
-      const data = await response.json();
+      const data = await response.json() as { appointments?: Appointment[]; users?: TeamUser[]; logs?: AuditLog[]; error?: string; blockers?: string[]; pendingCount?: number };
       if (!response.ok) throw new Error('request failed');
       setTeamUsers(data.users ?? []);
     } catch {
@@ -487,14 +529,15 @@ export default function Home() {
 
   async function addTeamUser(event: FormEvent) {
     event.preventDefault();
-    setPanelLoading(true);
+    if (teamSaving) return;
+    setTeamSaving(true);
     try {
       const response = await fetch('/api/team', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newUser),
       });
-      const data = await response.json();
+      const data = await response.json() as { appointments?: Appointment[]; users?: TeamUser[]; logs?: AuditLog[]; error?: string; blockers?: string[]; pendingCount?: number };
       if (!response.ok) {
         setNotice(data.error === 'email_exists' ? 'Este e-mail já possui acesso.' : 'Informe um e-mail válido.');
         return;
@@ -505,26 +548,23 @@ export default function Home() {
     } catch {
       setNotice('Não foi possível criar o acesso.');
     } finally {
-      setPanelLoading(false);
+      setTeamSaving(false);
     }
   }
 
   async function updateTeamUser(user: TeamUser, changes: Partial<Pick<TeamUser, 'active' | 'role'>>) {
-    setPanelLoading(true);
     try {
       const response = await fetch('/api/team', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: user.id, active: changes.active ?? user.active, role: changes.role ?? user.role }),
       });
-      const data = await response.json();
+      const data = await response.json() as { appointments?: Appointment[]; users?: TeamUser[]; logs?: AuditLog[]; error?: string; blockers?: string[]; pendingCount?: number };
       if (!response.ok) throw new Error('request failed');
       setTeamUsers(data.users ?? []);
       setNotice(changes.active === false ? 'Acesso desativado' : 'Acesso atualizado');
     } catch {
       setNotice('Não foi possível atualizar o acesso.');
-    } finally {
-      setPanelLoading(false);
     }
   }
 
@@ -533,7 +573,7 @@ export default function Home() {
     setPanelLoading(true);
     try {
       const response = await fetch('/api/audit');
-      const data = await response.json();
+      const data = await response.json() as { appointments?: Appointment[]; users?: TeamUser[]; logs?: AuditLog[]; error?: string; blockers?: string[]; pendingCount?: number };
       if (!response.ok) throw new Error('request failed');
       setAuditLogs(data.logs ?? []);
     } catch {
@@ -612,14 +652,8 @@ export default function Home() {
         </div>
       </header>
 
-      {saving && (
-        <div role="status" aria-live="polite" className="fixed right-3 left-3 top-20 z-[70] flex items-center justify-center gap-2 rounded-xl bg-[#7353a6] px-4 py-3 text-sm font-bold text-white shadow-xl sm:right-4 sm:left-auto sm:top-24 sm:justify-start">
-          <LoaderCircle className="animate-spin" size={18} /> {loaderMessage}
-        </div>
-      )}
-
-      {notice && !saving && (
-        <div role="status" className="fixed right-3 left-3 top-20 z-50 flex items-center justify-center gap-2 rounded-xl bg-[#3c3047] px-4 py-3 text-sm font-bold text-white shadow-xl sm:right-4 sm:left-auto sm:top-24 sm:justify-start">
+      {notice && (
+        <div role="status" className="pointer-events-none fixed right-3 left-3 bottom-4 z-[70] flex items-center justify-center gap-2 rounded-xl bg-[#3c3047] px-4 py-3 text-sm font-bold text-white shadow-xl sm:right-4 sm:left-auto sm:justify-start">
           <CheckCircle2 size={17} /> {notice}
         </div>
       )}
@@ -690,6 +724,7 @@ export default function Home() {
                       <span className="shrink-0 rounded-full bg-[#f1edf5] px-2.5 py-1 text-xs font-bold text-[#776a80]">{dayAppointments.length} {dayAppointments.length === 1 ? 'dog' : 'dogs'}</span>
                     </div>
 
+                    {dayActions(date, dayAppointments)}
                     {dayAppointments.length ? (
                       <div className="divide-y divide-[#eee8f3]">
                         {dayAppointments.map((item) => {
@@ -702,12 +737,12 @@ export default function Home() {
                             <div
                               key={item.id}
                               data-appointment-card
-                              className={`relative grid gap-3 px-3.5 py-4 transition hover:bg-white sm:grid-cols-[62px_minmax(0,1fr)_auto] sm:items-center sm:gap-4 sm:pr-5 sm:pl-11 ${item.status !== 'scheduled' ? 'bg-[#faf7fc]' : ''} ${draggingId === item.id ? 'opacity-45' : ''}`}
+                              className={`appointment-card relative grid gap-3 px-3.5 py-4 transition sm:grid-cols-[62px_minmax(0,1fr)_auto] sm:items-center sm:gap-4 sm:pr-5 sm:pl-11 ${cardColors[item.status]} ${selectedIds.includes(item.id) && item.status === 'scheduled' ? 'appointment-selected' : ''} ${draggingId === item.id ? 'opacity-45' : ''}`}
                             >
                               <button
                                 type="button"
-                                draggable={!saving}
-                                disabled={saving}
+                                draggable
+
                                 onDragStart={(event) => startDragging(event, item)}
                                 onDragEnd={() => { setDraggingId(null); setDropTarget(null); }}
                                 aria-label={`Arrastar ${item.dogName || item.ownerName || 'agendamento'} para outro dia`}
@@ -716,7 +751,8 @@ export default function Home() {
                               >
                                 <GripVertical size={18} />
                               </button>
-                              <div className="flex items-center gap-2 font-heading text-sm font-extrabold text-[#6a5c74] sm:block">
+                              <div className="flex items-center gap-3 font-heading text-sm font-extrabold text-[#6a5c74] sm:flex-col sm:items-start">
+                                {selectionCheckbox(item)}
                                 <Clock3 className="sm:hidden" size={15} /> {item.scheduledTime}
                               </div>
                               <div>
@@ -742,37 +778,38 @@ export default function Home() {
                                     </a>
                                   )}
                                   <span className="rounded-full bg-[#eee6f7] px-2 py-0.5 text-[11px] font-bold text-[#7353a6]">{planLabels[item.planType]} · {item.sessionNumber} de {item.totalSessions}</span>
-                                  <button
-                                    disabled={saving}
+                                  <span className={`appointment-status ${cardColors[item.status]}`}>{item.status === 'completed' ? <CheckCircle2 size={14} /> : item.status === 'absent' ? <X size={14} /> : <Clock3 size={14} />}{statusLabels[item.status]}</span>
+                                  <Button variant="ghost"
+
                                     title={item.planType === 'single' ? 'Pagamento deste banho' : 'Pagamento único para todo o plano'}
                                     onClick={() => updatePaid(item)}
                                     className={`inline-flex items-center gap-1 text-[11px] font-bold disabled:opacity-50 ${item.paid ? 'text-[#568066]' : 'text-[#c4563c]'}`}
                                   >
                                     <CircleDollarSign size={13} /> {item.planType === 'single' ? (item.paid ? 'Pago' : 'Pendente') : (item.paid ? 'Plano pago' : 'Plano pendente')}
-                                  </button>
+                                  </Button>
                                   {formatMoney(item.amountCents) && <span className="text-[11px] font-semibold text-[#81748a]">{formatMoney(item.amountCents)}</span>}
-                                  {item.paymentMethod && <button type="button" disabled={saving} onClick={() => editPaymentMethod(item)} title="Alterar forma de pagamento" className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#7353a6] hover:underline disabled:opacity-50"><CreditCard size={12} /> {paymentMethodLabel(item.paymentMethod)}</button>}
+                                  {item.paymentMethod && <button type="button" onClick={() => editPaymentMethod(item)} title="Alterar forma de pagamento" className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#7353a6] hover:underline disabled:opacity-50"><CreditCard size={12} /> {paymentMethodLabel(item.paymentMethod)}</button>}
                                 </div>
                                 <p className="flex flex-wrap items-center gap-x-1.5 text-sm text-[#7d7087]"><Scissors size={14} /> {item.services.length ? item.services.join(' · ') : 'Sem serviços definidos'}</p>
                                 {item.planType !== 'single' && <p className="mt-1.5 text-[11px] font-semibold text-[#92849c]">{stats.completed} concluídas · {stats.absent} faltas</p>}
                               </div>
                               <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center sm:justify-end sm:gap-1.5">
                                 <div className="col-span-2 flex items-center gap-1 sm:contents">
-                                  <Button disabled={saving} aria-label="Mover para o dia anterior" title="Mover para o dia anterior" variant="ghost" size="icon-sm" onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, -1) }, 'Movido para o dia anterior')} className="h-10 w-10 border border-[#ebe4f0] sm:h-8 sm:w-8 sm:border-0"><ChevronLeft /></Button>
-                                  <Button disabled={saving} aria-label="Mover para o próximo dia" title="Mover para o próximo dia" variant="ghost" size="icon-sm" onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, 1) }, 'Movido para o próximo dia')} className="h-10 w-10 border border-[#ebe4f0] sm:h-8 sm:w-8 sm:border-0"><ChevronRight /></Button>
+                                  <Button aria-label="Mover para o dia anterior" title="Mover para o dia anterior" variant="ghost" size="icon-sm" onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, -1) }, 'Movido para o dia anterior')} className="h-10 w-10 border border-[#ebe4f0] sm:h-8 sm:w-8 sm:border-0"><ChevronLeft /></Button>
+                                  <Button aria-label="Mover para o próximo dia" title="Mover para o próximo dia" variant="ghost" size="icon-sm" onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, 1) }, 'Movido para o próximo dia')} className="h-10 w-10 border border-[#ebe4f0] sm:h-8 sm:w-8 sm:border-0"><ChevronRight /></Button>
                                   <span className="ml-1 text-xs font-semibold text-[#92849c] sm:hidden">Mover dia</span>
                                 </div>
-                                {item.planType !== 'single' && <Button disabled={saving} variant="outline" onClick={() => openPlan(item)} className="h-11 w-full px-2.5 text-xs font-bold text-[#7353a6] sm:h-9 sm:w-auto"><ListChecks /> Ver plano</Button>}
-                                <Button disabled={saving} variant="outline" onClick={() => openDelete(item)} className="h-11 w-full border-[#ead0cc] px-2.5 text-xs font-bold text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f] sm:h-9 sm:w-auto"><Trash2 /> {item.planType === 'single' ? 'Apagar banho' : 'Apagar plano'}</Button>
+                                {item.planType !== 'single' && <Button variant="outline" onClick={() => openPlan(item)} className="h-11 w-full px-2.5 text-xs font-bold text-[#7353a6] sm:h-9 sm:w-auto"><ListChecks /> Ver plano</Button>}
+                                <Button variant="outline" onClick={() => openDelete(item)} className="h-11 w-full border-[#ead0cc] px-2.5 text-xs font-bold text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f] sm:h-9 sm:w-auto"><Trash2 /> {item.planType === 'single' ? 'Apagar banho' : 'Apagar plano'}</Button>
                                 {isRenewable ? (
-                                  <Button disabled={saving} onClick={() => mutate({ action: 'renew', groupId: item.groupId }, 'Plano renovado mantendo o mesmo dia')} className="h-11 w-full bg-[#9b6bc2] px-3 text-xs font-bold text-white hover:bg-[#8254a8] sm:h-9 sm:w-auto"><RefreshCw /> Renovar</Button>
+                                  <Button onClick={() => mutate({ action: 'renew', groupId: item.groupId }, 'Plano renovado mantendo o mesmo dia')} className="h-11 w-full bg-[#9b6bc2] px-3 text-xs font-bold text-white hover:bg-[#8254a8] sm:h-9 sm:w-auto"><RefreshCw /> Renovar</Button>
                                 ) : item.status === 'scheduled' ? (
                                   <>
-                                    <Button disabled={saving} variant="outline" onClick={() => mutate({ action: 'status', id: item.id, status: 'absent' }, 'Falta registrada')} className="h-11 w-full px-2.5 text-xs font-bold text-[#93503f] sm:h-9 sm:w-auto"><X /> Falta</Button>
-                                    <Button disabled={saving} onClick={() => mutate({ action: 'status', id: item.id, status: 'completed' }, 'Atendimento concluído')} className="h-11 w-full bg-[#7353a6] px-3 text-xs font-bold text-white hover:bg-[#5e3f90] sm:h-9 sm:w-auto"><Check /> Concluir</Button>
+                                    <Button variant="outline" onClick={() => mutate({ action: 'status', id: item.id, status: 'absent' }, 'Falta registrada')} className="h-11 w-full px-2.5 text-xs font-bold text-[#93503f] sm:h-9 sm:w-auto"><X /> Falta</Button>
+                                    <Button onClick={() => mutate({ action: 'status', id: item.id, status: 'completed' }, 'Atendimento concluído')} className="h-11 w-full bg-[#7353a6] px-3 text-xs font-bold text-white hover:bg-[#5e3f90] sm:h-9 sm:w-auto"><Check /> Concluir</Button>
                                   </>
                                 ) : (
-                                  <Button disabled={saving} variant="ghost" onClick={() => mutate({ action: 'status', id: item.id, status: 'scheduled' }, 'Atendimento reaberto')} className="col-span-2 h-11 w-full px-2.5 text-xs font-bold text-[#76687f] sm:h-9 sm:w-auto">{item.status === 'completed' ? 'Concluído' : 'Faltou'} · reabrir</Button>
+                                  <Button variant="ghost" onClick={() => mutate({ action: 'status', id: item.id, status: 'scheduled' }, 'Atendimento reaberto')} className="col-span-2 h-11 w-full px-2.5 text-xs font-bold text-[#76687f] sm:h-9 sm:w-auto">{item.status === 'completed' ? 'Concluído' : 'Faltou'} · reabrir</Button>
                                 )}
                               </div>
                             </div>
@@ -811,14 +848,14 @@ export default function Home() {
             ) : (
               <div className="space-y-3 text-sm">
                 {pendingGroups.slice(0, 3).map((item) => (
-                  <button disabled={saving} key={`pending-${item.groupId}`} onClick={() => updatePaid(item)} className="w-full rounded-xl bg-[#f7eee9] p-3 text-left transition hover:bg-[#f2e3da] disabled:opacity-50">
+                  <Button variant="ghost" key={`pending-${item.groupId}`} onClick={() => updatePaid(item)} className="h-auto w-full flex-wrap justify-start whitespace-normal rounded-xl bg-[#f7eee9] p-3 text-left transition hover:bg-[#f2e3da] disabled:opacity-50">
                     <p className="font-bold">{item.dogName || item.ownerName || 'Sem nome'} · {item.planType === 'single' ? 'banho pendente' : 'plano pendente'}</p><p className="mt-1 text-xs text-[#7e7771]">{item.planType === 'single' ? 'Toque para marcar o banho como pago' : 'Toque para marcar todas as sessões como pagas'}</p>
-                  </button>
+                  </Button>
                 ))}
                 {renewalItems.slice(0, 3).map((item) => (
-                  <button disabled={saving} key={`renew-${item.id}`} onClick={() => mutate({ action: 'renew', groupId: item.groupId }, 'Plano renovado mantendo o mesmo dia')} className="w-full rounded-xl bg-[#f1ecf7] p-3 text-left transition hover:bg-[#e9e0f3] disabled:opacity-50">
+                  <Button variant="ghost" key={`renew-${item.id}`} onClick={() => mutate({ action: 'renew', groupId: item.groupId }, 'Plano renovado mantendo o mesmo dia')} className="h-auto w-full flex-wrap justify-start whitespace-normal rounded-xl bg-[#f1ecf7] p-3 text-left transition hover:bg-[#e9e0f3] disabled:opacity-50">
                     <p className="font-bold">{item.dogName || item.ownerName || 'Sem nome'} · última sessão</p><p className="mt-1 text-xs font-extrabold text-[#7353a6]">Renovar plano →</p>
-                  </button>
+                  </Button>
                 ))}
               </div>
             )}
@@ -837,10 +874,12 @@ export default function Home() {
             <div className="rounded-xl bg-[#e8f4eb] p-3 text-center"><strong className="font-heading text-2xl font-extrabold text-[#4f765c]">{todayAppointments.filter((item) => item.status === 'completed').length}</strong><span className="block text-[10px] font-bold text-[#678471]">concluídos</span></div>
             <div className="rounded-xl bg-[#f7e7e2] p-3 text-center"><strong className="font-heading text-2xl font-extrabold text-[#ad533d]">{todayAppointments.filter((item) => item.status === 'absent').length}</strong><span className="block text-[10px] font-bold text-[#956c61]">faltas</span></div>
           </div>
+          {dayActions(today, todayAppointments)}
           {todayAppointments.length ? (
             <div className="space-y-2.5">
               {todayAppointments.map((item) => (
-                <article key={`today-${item.id}`} className="rounded-2xl border border-[#e4dced] bg-white p-4">
+                <article key={`today-${item.id}`} className={`appointment-card rounded-2xl border p-4 ${cardColors[item.status]} ${selectedIds.includes(item.id) && item.status === 'scheduled' ? 'appointment-selected' : ''}`}>
+                  {item.status === 'scheduled' && <label className="mb-3 flex min-h-8 cursor-pointer items-center gap-2 text-sm font-semibold">{selectionCheckbox(item)} Selecionar banho</label>}
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="flex min-w-0 items-start gap-3">
                       <span className="grid h-10 min-w-14 shrink-0 place-items-center rounded-xl bg-[#eee6f7] px-2 font-heading text-sm font-extrabold text-[#7353a6]">{item.scheduledTime}</span>
@@ -849,7 +888,7 @@ export default function Home() {
                         {item.ownerName && <p className="text-[11px] font-semibold text-[#92849c]">Dono: {item.ownerName}</p>}
                         {item.cpf && <p className="text-[10px] font-semibold text-[#9b8ca5]">CPF: {item.cpf}</p>}
                         <p className="mt-1 text-xs text-[#81748a]">{planLabels[item.planType]} · sessão {item.sessionNumber} de {item.totalSessions}</p>
-                        {item.paymentMethod && <button type="button" disabled={saving} onClick={() => editPaymentMethod(item)} className="mt-1 flex items-center gap-1 text-[11px] font-semibold text-[#7353a6] hover:underline disabled:opacity-50"><CreditCard size={12} /> {paymentMethodLabel(item.paymentMethod)}</button>}
+                        {item.paymentMethod && <button type="button" onClick={() => editPaymentMethod(item)} className="mt-1 flex items-center gap-1 text-[11px] font-semibold text-[#7353a6] hover:underline disabled:opacity-50"><CreditCard size={12} /> {paymentMethodLabel(item.paymentMethod)}</button>}
                       </div>
                     </div>
                     <span className={`rounded-full px-2.5 py-1 text-[11px] font-extrabold ${item.status === 'completed' ? 'bg-[#e8f4eb] text-[#4f765c]' : item.status === 'absent' ? 'bg-[#f7e7e2] text-[#ad533d]' : 'bg-[#f1edf5] text-[#776a80]'}`}>{statusLabels[item.status]}</span>
@@ -857,15 +896,15 @@ export default function Home() {
                   <p className="mt-3 flex flex-wrap items-center gap-x-1.5 text-xs text-[#7d7087]"><Scissors size={13} /> {item.services.length ? item.services.join(' · ') : 'Sem serviços definidos'}</p>
                   <div className="mt-3 grid grid-cols-2 gap-2 border-t border-[#eee8f3] pt-3 sm:flex sm:flex-wrap sm:items-center sm:gap-1.5">
                     {item.whatsapp && <a href={whatsappUrl(item.whatsapp)} target="_blank" rel="noreferrer" className="flex h-11 items-center justify-center gap-2 rounded-lg bg-[#e6f7eb] px-3 text-xs font-bold text-[#1e8b4c] sm:grid sm:h-8 sm:w-8 sm:p-0" aria-label="Abrir WhatsApp"><MessageCircle size={16} /><span className="sm:hidden">WhatsApp</span></a>}
-                    <Button disabled={saving} variant="outline" size="sm" onClick={() => editFromOverview(item)} className="h-11 w-full sm:h-8 sm:w-auto"><Pencil /> Editar</Button>
-                    {item.planType !== 'single' && <Button disabled={saving} variant="outline" size="sm" onClick={() => openPlanFromToday(item)} className="h-11 w-full text-[#7353a6] sm:h-8 sm:w-auto"><ListChecks /> Ver plano</Button>}
+                    <Button variant="outline" size="sm" onClick={() => editFromOverview(item)} className="h-11 w-full sm:h-8 sm:w-auto"><Pencil /> Editar</Button>
+                    {item.planType !== 'single' && <Button variant="outline" size="sm" onClick={() => openPlanFromToday(item)} className="h-11 w-full text-[#7353a6] sm:h-8 sm:w-auto"><ListChecks /> Ver plano</Button>}
                     {item.status === 'scheduled' ? (
                       <>
-                        <Button disabled={saving} variant="outline" size="sm" onClick={() => mutate({ action: 'status', id: item.id, status: 'absent' }, 'Falta registrada')} className="h-11 w-full text-[#93503f] sm:h-8 sm:w-auto"><X /> Falta</Button>
-                        <Button disabled={saving} size="sm" onClick={() => mutate({ action: 'status', id: item.id, status: 'completed' }, 'Atendimento concluído')} className="h-11 w-full bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90] sm:h-8 sm:w-auto"><Check /> Concluir</Button>
+                        <Button variant="outline" size="sm" onClick={() => mutate({ action: 'status', id: item.id, status: 'absent' }, 'Falta registrada')} className="h-11 w-full text-[#93503f] sm:h-8 sm:w-auto"><X /> Falta</Button>
+                        <Button size="sm" onClick={() => mutate({ action: 'status', id: item.id, status: 'completed' }, 'Atendimento concluído')} className="h-11 w-full bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90] sm:h-8 sm:w-auto"><Check /> Concluir</Button>
                       </>
                     ) : (
-                      <Button disabled={saving} variant="ghost" size="sm" onClick={() => mutate({ action: 'status', id: item.id, status: 'scheduled' }, 'Atendimento reaberto')} className="h-11 w-full font-bold text-[#76687f] sm:h-8 sm:w-auto">Reabrir</Button>
+                      <Button variant="ghost" size="sm" onClick={() => mutate({ action: 'status', id: item.id, status: 'scheduled' }, 'Atendimento reaberto')} className="h-11 w-full font-bold text-[#76687f] sm:h-8 sm:w-auto">Reabrir</Button>
                     )}
                   </div>
                 </article>
@@ -902,7 +941,7 @@ export default function Home() {
                   <span className="rounded-full bg-[#eee6f7] px-2.5 py-1 text-xs font-extrabold text-[#7353a6]">Plano {planLabels[selectedPlanHead.planType]}</span>
                   <span className={`rounded-full px-2.5 py-1 text-xs font-extrabold ${selectedPlanHead.paid ? 'bg-[#e8f4eb] text-[#4f765c]' : 'bg-[#f7e7e2] text-[#ad533d]'}`}>{selectedPlanHead.paid ? 'Plano pago' : 'Plano pendente'}</span>
                   {formatMoney(selectedPlanHead.amountCents) && <span className="text-xs font-bold text-[#6f6179]">{formatMoney(selectedPlanHead.amountCents)}</span>}
-                  {selectedPlanHead.paymentMethod && <button type="button" disabled={saving} onClick={() => editPaymentMethod(selectedPlanHead)} title="Alterar forma de pagamento" className="inline-flex items-center gap-1 text-xs font-bold text-[#7353a6] hover:underline disabled:opacity-50"><CreditCard size={13} /> {paymentMethodLabel(selectedPlanHead.paymentMethod)}</button>}
+                  {selectedPlanHead.paymentMethod && <button type="button" onClick={() => editPaymentMethod(selectedPlanHead)} title="Alterar forma de pagamento" className="inline-flex items-center gap-1 text-xs font-bold text-[#7353a6] hover:underline disabled:opacity-50"><CreditCard size={13} /> {paymentMethodLabel(selectedPlanHead.paymentMethod)}</button>}
                 </div>
                 <div className="flex items-center gap-2 text-[11px] font-bold text-[#81748a]">
                   <span>{selectedPlanStats.completed} concluídos</span><span>·</span><span>{selectedPlanStats.absent} faltas</span><span>·</span><span>{selectedPlanStats.scheduled} abertos</span>
@@ -911,20 +950,20 @@ export default function Home() {
               <div className="mt-3 grid grid-cols-2 gap-2 border-t border-[#e5dced] pt-3 sm:flex sm:flex-wrap sm:items-center">
                 {selectedPlanHead.whatsapp && <a href={whatsappUrl(selectedPlanHead.whatsapp)} target="_blank" rel="noreferrer" className="flex h-11 items-center justify-center gap-2 rounded-lg bg-[#e6f7eb] px-3 text-xs font-bold text-[#1e8b4c] sm:grid sm:h-9 sm:w-9 sm:p-0" aria-label="Abrir WhatsApp"><MessageCircle size={17} /><span className="sm:hidden">WhatsApp</span></a>}
                 <Button
-                  disabled={saving}
+
                   variant="outline"
                   onClick={() => updatePaid(selectedPlanHead)}
                   className={`h-11 w-full sm:h-9 sm:w-auto ${selectedPlanHead.paid ? 'font-bold text-[#568066]' : 'font-bold text-[#c4563c]'}`}
                 >
                   <CircleDollarSign /> {selectedPlanHead.paid ? 'Marcar pendente' : 'Marcar plano pago'}
                 </Button>
-                <Button disabled={saving} variant="outline" onClick={deleteFromPlan} className="h-11 w-full border-[#ead0cc] font-bold text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f] sm:h-9 sm:w-auto"><Trash2 /> Apagar plano</Button>
+                <Button variant="outline" onClick={deleteFromPlan} className="h-11 w-full border-[#ead0cc] font-bold text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f] sm:h-9 sm:w-auto"><Trash2 /> Apagar plano</Button>
               </div>
             </div>
           )}
           <div className="space-y-2.5">
             {selectedPlan.map((session) => (
-              <article key={session.id} className="rounded-2xl border border-[#e4dced] bg-white p-4">
+              <article key={session.id} className={`appointment-card rounded-2xl border p-4 ${cardColors[session.status]}`}>
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="flex min-w-0 items-start gap-3">
                     <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#eee6f7] font-heading text-sm font-extrabold text-[#7353a6]">{session.sessionNumber}</span>
@@ -941,7 +980,7 @@ export default function Home() {
                     <span className="mb-1 block text-[10px] font-extrabold uppercase tracking-[0.08em] text-[#8b7c95]">Alterar data</span>
                     <Input
                       type="date"
-                      disabled={saving}
+
                       value={session.scheduledDate}
                       onChange={(event) => {
                         if (!event.target.value) return;
@@ -955,18 +994,18 @@ export default function Home() {
                   </label>
                   <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center sm:justify-end sm:gap-1.5">
                     <div className="col-span-2 flex items-center gap-1 sm:contents">
-                      <Button disabled={saving} variant="ghost" size="icon-sm" aria-label="Mover para o dia anterior" title="Mover para o dia anterior" onClick={() => mutate({ action: 'move', id: session.id, scheduledDate: addDays(session.scheduledDate, -1) }, 'Movido para o dia anterior')} className="h-10 w-10 border border-[#ebe4f0] sm:h-8 sm:w-8 sm:border-0"><ChevronLeft /></Button>
-                      <Button disabled={saving} variant="ghost" size="icon-sm" aria-label="Mover para o próximo dia" title="Mover para o próximo dia" onClick={() => mutate({ action: 'move', id: session.id, scheduledDate: addDays(session.scheduledDate, 1) }, 'Movido para o próximo dia')} className="h-10 w-10 border border-[#ebe4f0] sm:h-8 sm:w-8 sm:border-0"><ChevronRight /></Button>
+                      <Button variant="ghost" size="icon-sm" aria-label="Mover para o dia anterior" title="Mover para o dia anterior" onClick={() => mutate({ action: 'move', id: session.id, scheduledDate: addDays(session.scheduledDate, -1) }, 'Movido para o dia anterior')} className="h-10 w-10 border border-[#ebe4f0] sm:h-8 sm:w-8 sm:border-0"><ChevronLeft /></Button>
+                      <Button variant="ghost" size="icon-sm" aria-label="Mover para o próximo dia" title="Mover para o próximo dia" onClick={() => mutate({ action: 'move', id: session.id, scheduledDate: addDays(session.scheduledDate, 1) }, 'Movido para o próximo dia')} className="h-10 w-10 border border-[#ebe4f0] sm:h-8 sm:w-8 sm:border-0"><ChevronRight /></Button>
                       <span className="ml-1 text-xs font-semibold text-[#92849c] sm:hidden">Mover dia</span>
                     </div>
-                    <Button disabled={saving} variant="outline" size="sm" onClick={() => editFromOverview(session)} className="h-11 w-full sm:h-8 sm:w-auto"><Pencil /> Editar sessão</Button>
+                    <Button variant="outline" size="sm" onClick={() => editFromOverview(session)} className="h-11 w-full sm:h-8 sm:w-auto"><Pencil /> Editar sessão</Button>
                     {session.status === 'scheduled' ? (
                       <>
-                        <Button disabled={saving} variant="outline" size="sm" onClick={() => mutate({ action: 'status', id: session.id, status: 'absent' }, 'Falta registrada')} className="h-11 w-full text-[#93503f] sm:h-8 sm:w-auto"><X /> Falta</Button>
-                        <Button disabled={saving} size="sm" onClick={() => mutate({ action: 'status', id: session.id, status: 'completed' }, 'Atendimento concluído')} className="h-11 w-full bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90] sm:h-8 sm:w-auto"><Check /> Concluir</Button>
+                        <Button variant="outline" size="sm" onClick={() => mutate({ action: 'status', id: session.id, status: 'absent' }, 'Falta registrada')} className="h-11 w-full text-[#93503f] sm:h-8 sm:w-auto"><X /> Falta</Button>
+                        <Button size="sm" onClick={() => mutate({ action: 'status', id: session.id, status: 'completed' }, 'Atendimento concluído')} className="h-11 w-full bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90] sm:h-8 sm:w-auto"><Check /> Concluir</Button>
                       </>
                     ) : (
-                      <Button disabled={saving} variant="ghost" size="sm" onClick={() => mutate({ action: 'status', id: session.id, status: 'scheduled' }, 'Atendimento reaberto')} className="h-11 w-full font-bold text-[#76687f] sm:h-8 sm:w-auto">Reabrir</Button>
+                      <Button variant="ghost" size="sm" onClick={() => mutate({ action: 'status', id: session.id, status: 'scheduled' }, 'Atendimento reaberto')} className="h-11 w-full font-bold text-[#76687f] sm:h-8 sm:w-auto">Reabrir</Button>
                     )}
                   </div>
                 </div>
@@ -977,7 +1016,7 @@ export default function Home() {
             <Button variant="outline" onClick={closePlan}>{planReturnToToday ? 'Voltar para atendimentos de hoje' : 'Fechar'}</Button>
             {selectedPlanIsRenewable && selectedPlanHead && (
               <Button
-                disabled={saving}
+
                 onClick={async () => {
                   const ok = await mutate({ action: 'renew', groupId: selectedPlanHead.groupId }, 'Plano renovado mantendo o mesmo dia');
                   if (ok) {
@@ -1012,15 +1051,15 @@ export default function Home() {
                 key={method}
                 type="button"
                 variant="outline"
-                disabled={saving}
+
                 onClick={() => confirmPayment(method)}
                 className={`h-12 justify-start font-bold ${paymentTarget?.paymentMethod === method ? 'border-[#7353a6] bg-[#eee6f7] text-[#7353a6]' : 'border-[#dfd5e8] bg-white'}`}
               >
-                {saving ? <LoaderCircle className="animate-spin" /> : <CreditCard />} {paymentMethodLabels[method]}
+                <CreditCard /> {paymentMethodLabels[method]}
               </Button>
             ))}
           </div>
-          <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5"><Button type="button" variant="outline" disabled={saving} onClick={() => setPaymentOpen(false)}>Cancelar</Button></DialogFooter>
+          <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5"><Button type="button" variant="outline"  onClick={() => setPaymentOpen(false)}>Cancelar</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -1140,7 +1179,7 @@ export default function Home() {
             </div>
             <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5">
               <Button type="button" variant="outline" onClick={() => setNewOpen(false)}>Cancelar</Button>
-              <Button type="submit" disabled={saving} className="bg-[#9b6bc2] font-bold text-white hover:bg-[#8254a8]">{saving ? <LoaderCircle className="animate-spin" /> : <Sparkles />} {saving ? 'Salvando...' : 'Criar agendamento'}</Button>
+              <Button type="submit" disabled={Boolean(savingForm)} className="bg-[#9b6bc2] font-bold text-white hover:bg-[#8254a8]">{savingForm === 'create' ? <LoaderCircle className="animate-spin" /> : <Sparkles />} {savingForm === 'create' ? 'Salvando...' : 'Criar agendamento'}</Button>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -1165,10 +1204,10 @@ export default function Home() {
             </div>
             <div><span className="mb-2 block text-xs font-bold text-[#6f6179]">O que é para fazer</span><div className="flex flex-wrap gap-2">{serviceOptions.map((service) => <button type="button" key={service} onClick={() => toggleService(service, true)} className={`rounded-full border px-3 py-2 text-xs font-bold ${editing.services.includes(service) ? 'border-[#7353a6] bg-[#7353a6] text-white' : 'border-[#e4dced] bg-white text-[#6f6179]'}`}>{service}</button>)}</div></div>
             <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:justify-between sm:px-5">
-              <Button type="button" variant="outline" disabled={saving} onClick={() => setDeleteOpen(true)} className="border-[#ead0cc] text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f]"><Trash2 /> {editing.planType === 'single' ? 'Apagar banho' : 'Apagar plano'}</Button>
+              <Button type="button" variant="outline"  onClick={() => setDeleteOpen(true)} className="border-[#ead0cc] text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f]"><Trash2 /> {editing.planType === 'single' ? 'Apagar banho' : 'Apagar plano'}</Button>
               <div className="flex flex-col-reverse gap-2 sm:flex-row">
-                <Button type="button" variant="outline" disabled={saving} onClick={() => setEditOpen(false)}>Cancelar</Button>
-                <Button type="submit" disabled={saving} className="bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90]">{saving && <LoaderCircle className="animate-spin" />} {saving ? 'Salvando...' : 'Salvar alterações'}</Button>
+                <Button type="button" variant="outline"  onClick={() => setEditOpen(false)}>Cancelar</Button>
+                <Button type="submit" disabled={Boolean(savingForm)} className="bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90]">{savingForm === 'edit' && <LoaderCircle className="animate-spin" />} {savingForm === 'edit' ? 'Salvando...' : 'Salvar alterações'}</Button>
               </div>
             </DialogFooter>
           </form>}
@@ -1189,8 +1228,8 @@ export default function Home() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={saving}>{deleteBlockers.length ? 'Entendi' : 'Cancelar'}</AlertDialogCancel>
-            {!deleteBlockers.length && <AlertDialogAction disabled={saving} onClick={deleteAppointment} className="bg-[#a94338] font-bold text-white hover:bg-[#92382f]">{saving ? <LoaderCircle className="animate-spin" /> : <Trash2 />} {saving ? 'Apagando...' : 'Apagar definitivamente'}</AlertDialogAction>}
+            <AlertDialogCancel >{deleteBlockers.length ? 'Entendi' : 'Cancelar'}</AlertDialogCancel>
+            {!deleteBlockers.length && <Button onClick={deleteAppointment} className="bg-[#a94338] font-bold text-white hover:bg-[#92382f]"><Trash2 /> Apagar definitivamente</Button>}
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -1208,7 +1247,7 @@ export default function Home() {
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">E-mail da conta</span><Input required type="email" value={newUser.email} onChange={(event) => setNewUser({ ...newUser, email: event.target.value })} placeholder="maria@email.com" className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Permissão</span><select value={newUser.role} onChange={(event) => setNewUser({ ...newUser, role: event.target.value as 'admin' | 'staff' })} className="h-11 w-full rounded-md border border-input bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#7353a6]/30"><option value="staff">Equipe</option><option value="admin">Administrador</option></select></label>
             </div>
-            <Button type="submit" disabled={panelLoading} className="mt-3 bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90]"><Plus /> {panelLoading ? 'Salvando...' : 'Criar acesso'}</Button>
+            <Button type="submit" disabled={teamSaving} className="mt-3 bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90]">{teamSaving ? <LoaderCircle className="animate-spin" /> : <Plus />} {teamSaving ? 'Salvando...' : 'Criar acesso'}</Button>
           </form>
           <div className="space-y-2">
             <div className="flex items-center justify-between"><p className="text-sm font-extrabold">Pessoas cadastradas</p><span className="text-xs font-semibold text-[#8b7c95]">{teamUsers.filter((user) => user.active).length} ativos</span></div>
