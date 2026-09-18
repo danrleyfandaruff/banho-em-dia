@@ -177,6 +177,7 @@ export async function POST(request: Request) {
     const startDate = String(body.scheduledDate ?? createdAt.slice(0, 10));
     const amountCents = body.amountCents === null || body.amountCents === undefined ? null : Number(body.amountCents);
     const sessionServices = Array.isArray(body.sessionServices) ? body.sessionServices : [];
+    const sessionCompleted = Array.isArray(body.sessionCompleted) ? body.sessionCompleted.map(Boolean) : [];
     const ownerName = String(body.ownerName ?? '');
     const dogName = String(body.dogName ?? '');
     const whatsapp = String(body.whatsapp ?? '');
@@ -189,7 +190,7 @@ export async function POST(request: Request) {
           id, group_id, customer_pet_name, owner_name, dog_name, whatsapp, cpf, payment_method, plan_type, amount_cents, paid,
           scheduled_date, scheduled_time, status, services, session_number,
           total_sessions, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).bind(
         crypto.randomUUID(),
         groupId,
@@ -204,6 +205,7 @@ export async function POST(request: Request) {
         body.paid ? 1 : 0,
         addDays(startDate, intervalDays * index),
         String(body.scheduledTime ?? '09:00'),
+        sessionCompleted[index] ? 'completed' : 'scheduled',
         JSON.stringify(
           Array.isArray(sessionServices[index])
             ? sessionServices[index]
@@ -218,7 +220,7 @@ export async function POST(request: Request) {
     await writeAudit(
       auth.user, 'appointment_created', 'appointment_group', groupId,
       `Criou ${totalSessions === 1 ? 'um banho avulso' : `um plano com ${totalSessions} sessões`} para ${dogName || ownerName || 'cliente sem nome'}`,
-      { planType, totalSessions, startDate, paymentMethod },
+      { planType, totalSessions, startDate, paymentMethod, completedSessions: sessionCompleted.filter(Boolean).length },
     );
   }
 

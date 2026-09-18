@@ -8,6 +8,7 @@ import {
   Sparkles, Trash2, UserPlus, UserRound, Users, X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogMedia,
@@ -167,6 +168,7 @@ const emptyForm = () => ({
   planType: 'monthly' as PlanType, amount: '', paid: false,
   scheduledDate: localDateString(), scheduledTime: '09:00',
   sessionServices: Array.from({ length: 4 }, () => ['Banho']),
+  sessionCompleted: Array.from({ length: 4 }, () => false),
 });
 
 export default function Home() {
@@ -1053,6 +1055,10 @@ export default function Home() {
                           { length: count },
                           (_, index) => form.sessionServices[index] ?? ['Banho'],
                         ),
+                        sessionCompleted: Array.from(
+                          { length: count },
+                          (_, index) => form.sessionCompleted[index] ?? false,
+                        ),
                       });
                       setActiveServiceSession(0);
                     }}
@@ -1068,7 +1074,7 @@ export default function Home() {
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Horário</span><Input type="time" value={form.scheduledTime} onChange={(event) => setForm({ ...form, scheduledTime: event.target.value })} className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Valor (opcional)</span><Input inputMode="numeric" value={form.amount} onChange={(event) => setForm({ ...form, amount: maskReal(event.target.value) })} placeholder="R$ 0,00" className="h-11 bg-white font-semibold tabular-nums" /></label>
             </div>
-            <div className="rounded-2xl border border-[#e4dced] bg-white p-3.5">
+            <div className="min-w-0 rounded-2xl border border-[#e4dced] bg-white p-3.5">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <span className="flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><Scissors size={14} /> Serviços por sessão</span>
                 {totalSessionsFor(form.planType) > 1 && (
@@ -1087,7 +1093,7 @@ export default function Home() {
                   </button>
                 )}
               </div>
-              <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
+              <div className="mb-3 flex max-w-full gap-2 overflow-x-auto pb-1">
                 {Array.from({ length: totalSessionsFor(form.planType) }, (_, index) => {
                   const date = addDays(form.scheduledDate, intervalDaysFor(form.planType) * index);
                   return (
@@ -1097,13 +1103,28 @@ export default function Home() {
                       onClick={() => setActiveServiceSession(index)}
                       className={`min-w-[92px] rounded-xl border px-3 py-2 text-left transition ${activeServiceSession === index ? 'border-[#7353a6] bg-[#eee6f7] ring-1 ring-[#7353a6]' : 'border-[#ded7e7] bg-[#fbf9fd]'}`}
                     >
-                      <strong className="block text-xs">Sessão {index + 1}</strong>
+                      <strong className="flex items-center gap-1 text-xs">Sessão {index + 1}{form.sessionCompleted[index] && <CheckCircle2 size={13} className="text-[#4f765c]" />}</strong>
                       <span className="mt-0.5 block text-[10px] capitalize text-[#81748a]">{new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short' }).format(new Date(`${date}T12:00:00`))}</span>
                     </button>
                   );
                 })}
               </div>
-              <p className="mb-2 text-[11px] font-semibold text-[#81748a]">Escolha o que fazer na sessão {activeServiceSession + 1}</p>
+              <label className="mb-3 flex cursor-pointer items-start gap-3 rounded-xl border border-[#e4dced] bg-[#faf7fc] p-3">
+                <Checkbox
+                  checked={form.sessionCompleted[activeServiceSession] ?? false}
+                  onCheckedChange={(checked) => {
+                    const sessionCompleted = [...form.sessionCompleted];
+                    sessionCompleted[activeServiceSession] = checked === true;
+                    setForm({ ...form, sessionCompleted });
+                  }}
+                  className="mt-0.5 size-5"
+                />
+                <span>
+                  <strong className="block text-sm text-[#4f4358]">Esta sessão já foi realizada</strong>
+                  <small className="mt-0.5 block text-xs text-[#85768f]">Será cadastrada como concluída</small>
+                </span>
+              </label>
+              <p className="mb-2 text-[11px] font-semibold text-[#81748a]">Escolha o que foi ou será feito na sessão {activeServiceSession + 1}</p>
               <div className="flex flex-wrap gap-2">
                 {serviceOptions.map((service) => {
                   const selected = (form.sessionServices[activeServiceSession] ?? []).includes(service);

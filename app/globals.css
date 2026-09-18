@@ -65,8 +65,17 @@ body {
     border-radius: 1rem !important;
     padding-bottom: max(1rem, env(safe-area-inset-bottom)) !important;
     overflow-y: auto !important;
+    overflow-x: hidden !important;
+    min-width: 0 !important;
+    box-sizing: border-box;
     overscroll-behavior-y: contain;
     -webkit-overflow-scrolling: touch;
+  }
+
+  .mobile-sheet form,
+  .mobile-sheet form > * {
+    min-width: 0;
+    max-width: 100%;
   }
 
   .mobile-sheet [data-slot='dialog-title'] {
