@@ -2,7 +2,7 @@
 
 import { ComponentProps, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight,
+  Activity, Calculator, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight,
   CircleDollarSign, Clock3, CreditCard, Dog, GripVertical, History, IdCard, ListChecks, LoaderCircle, LogOut,
   MessageCircle, PawPrint, Pencil, Plus, RefreshCw, Scissors, ShieldCheck,
   Sparkles, Trash2, UserPlus, UserRound, Users, X,
@@ -167,12 +167,12 @@ function paymentPreview(amount: string, method: PaymentMethod, rates: CardRates)
   catch { return null; }
 }
 
-function PaymentSummary({ amount, method, rates }: { amount: string; method: PaymentMethod; rates: CardRates }) {
+function PaymentSummary({ amount, method, rates, baseLabel = 'Valor do banho/plano' }: { amount: string; method: PaymentMethod; rates: CardRates; baseLabel?: string }) {
   const details = paymentPreview(amount, method, rates);
   if (!method) return null;
   return <div className="rounded-xl border border-[#d9c5eb] bg-[#f3eafa] p-4 text-sm" aria-live="polite">
     {details ? <>
-      <div className="flex justify-between gap-3"><span>Valor do banho/plano</span><strong>{formatMoney(details.baseCents)}</strong></div>
+      <div className="flex justify-between gap-3"><span>{baseLabel}</span><strong>{formatMoney(details.baseCents)}</strong></div>
       <div className="mt-2 flex justify-between gap-3"><span>{cardRateBps(method, rates) ? `Acréscimo · Stone ${(details.rateBps / 100).toLocaleString('pt-BR')}%` : 'Sem acréscimo'}</span><strong>{formatMoney(details.surchargeCents)}</strong></div>
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[#d9c5eb] pt-3"><strong>Total para cobrar</strong><strong className="text-2xl text-[#653b88]">{formatMoney(details.totalCents)}</strong></div>
       {cardRateBps(method, rates) > 0 && <p className="mt-2 text-xs leading-5 text-[#6f6179]">{method === 'credit' ? 'Crédito à vista. ' : ''}Acréscimo calculado para receber o valor original após a taxa, arredondado para centavos.</p>}
@@ -243,6 +243,9 @@ export default function Home() {
   const [ratesDraft, setRatesDraft] = useState({ credit: '', debit: '' });
   const [ratesError, setRatesError] = useState('');
   const [ratesSaving, setRatesSaving] = useState(false);
+  const [calculatorOpen, setCalculatorOpen] = useState(false);
+  const [calculatorAmount, setCalculatorAmount] = useState('');
+  const [calculatorMethod, setCalculatorMethod] = useState<PaymentMethod>('credit');
   const [planReturnToToday, setPlanReturnToToday] = useState(false);
   const [selectedPlanGroupId, setSelectedPlanGroupId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
@@ -514,6 +517,21 @@ export default function Home() {
     }
   }
 
+  async function openCalculator() {
+    try {
+      const response = await fetch('/api/payment-rates', { cache: 'no-store' });
+      if (!response.ok) throw new Error('load_failed');
+      const data = await response.json() as { rates: CardRates };
+      setRates(data.rates);
+      setCalculatorAmount('');
+      setCalculatorMethod('credit');
+      setCalculatorOpen(true);
+    } catch {
+      setNotice('Não foi possível carregar as taxas para calcular. Tente novamente.');
+      window.setTimeout(() => setNotice(''), 4200);
+    }
+  }
+
   async function openRates() {
     try {
       const response = await fetch('/api/payment-rates');
@@ -721,8 +739,9 @@ export default function Home() {
               <h1 className="truncate font-heading text-base font-extrabold tracking-[-0.03em] sm:text-xl"><span className="sm:hidden">HEIN PET</span><span className="hidden sm:inline">HEIN PET SALON</span></h1>
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-0.5 sm:gap-2">
+          <div className="flex max-w-full flex-wrap items-center gap-0.5 sm:gap-2">
             <PwaInstallButton />
+            <Button variant="ghost" onClick={openCalculator} title="Calcular valor sem agendamento" className="px-2 text-[#7353a6]"><Calculator /> Calcular</Button>
             {currentUser?.role === 'admin' && (
               <>
                 <Button variant="ghost" onClick={openRates} title="Alterar taxas da Stone" className="px-2 text-[#7353a6]"><CreditCard /> Taxas</Button>
@@ -1123,6 +1142,35 @@ export default function Home() {
                 <RefreshCw /> Renovar plano
               </Button>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={calculatorOpen} onOpenChange={setCalculatorOpen}>
+        <DialogContent className="mobile-sheet border-0 bg-[#fffbff] p-4 sm:max-w-md sm:p-5">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><Calculator className="text-[#7353a6]" /> Calcular valor a cobrar</DialogTitle>
+            <DialogDescription>Simule com as taxas salvas, sem cadastrar banho nem registrar pagamento.</DialogDescription>
+          </DialogHeader>
+          <label className="block text-sm font-semibold">Valor que deseja receber, sem taxa
+            <Input autoFocus inputMode="numeric" value={calculatorAmount} onChange={(event) => setCalculatorAmount(maskReal(event.target.value))} placeholder="R$ 0,00" className="mt-2 h-11 bg-white" />
+          </label>
+          <fieldset>
+            <legend className="mb-2 text-sm font-semibold">Forma de pagamento</legend>
+            <div className="grid grid-cols-2 gap-2">
+              {paymentMethods.map((method) => (
+                <Button key={method} type="button" variant="outline" onClick={() => setCalculatorMethod(method)} aria-pressed={calculatorMethod === method}
+                  className={`h-auto min-h-12 flex-wrap justify-start whitespace-normal font-bold ${calculatorMethod === method ? 'border-[#7353a6] bg-[#eee6f7] text-[#7353a6]' : 'border-[#dfd5e8] bg-white'}`}>
+                  <CreditCard /> {paymentMethodLabels[method]}
+                  <span className="text-xs">{['credit', 'debit'].includes(method) ? `${(cardRateBps(method, rates) / 100).toLocaleString('pt-BR')}%${method === 'credit' ? ' · à vista' : ''}` : 'Sem taxa'}</span>
+                </Button>
+              ))}
+            </div>
+          </fieldset>
+          <PaymentSummary amount={calculatorAmount} method={calculatorMethod} rates={rates} baseLabel="Valor a receber" />
+          <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5">
+            <Button variant="outline" onClick={() => setCalculatorAmount('')}>Limpar valor</Button>
+            <Button onClick={() => setCalculatorOpen(false)}>Fechar</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
