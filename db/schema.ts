@@ -1,5 +1,11 @@
 import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
+export const paymentSettings = sqliteTable('payment_settings', {
+  id: text('id').primaryKey(),
+  creditBps: integer('credit_bps').notNull(),
+  debitBps: integer('debit_bps').notNull(),
+});
+
 export const appointments = sqliteTable(
   'appointments',
   {

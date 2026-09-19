@@ -20,7 +20,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { PwaInstallButton } from '@/components/pwa-install-button';
-import { calculatePayment, cardRateBps, type PaymentBreakdown } from '@/lib/payment';
+import { calculatePayment, cardRateBps, defaultCardRates, type CardRates, type PaymentBreakdown } from '@/lib/payment';
 
 type PlanType = 'monthly' | 'fortnightly' | 'single';
 type Status = 'scheduled' | 'completed' | 'absent';
@@ -162,21 +162,21 @@ function maskReal(value: string) {
   return formatMoney(Number(digits)) ?? '';
 }
 
-function paymentPreview(amount: string, method: PaymentMethod) {
-  try { return calculatePayment(realToCents(amount), method); }
+function paymentPreview(amount: string, method: PaymentMethod, rates: CardRates) {
+  try { return calculatePayment(realToCents(amount), method, rates); }
   catch { return null; }
 }
 
-function PaymentSummary({ amount, method }: { amount: string; method: PaymentMethod }) {
-  const details = paymentPreview(amount, method);
+function PaymentSummary({ amount, method, rates }: { amount: string; method: PaymentMethod; rates: CardRates }) {
+  const details = paymentPreview(amount, method, rates);
   if (!method) return null;
   return <div className="rounded-xl border border-[#d9c5eb] bg-[#f3eafa] p-4 text-sm" aria-live="polite">
     {details ? <>
       <div className="flex justify-between gap-3"><span>Valor do banho/plano</span><strong>{formatMoney(details.baseCents)}</strong></div>
-      <div className="mt-2 flex justify-between gap-3"><span>{cardRateBps(method) ? `Acréscimo · Stone ${(details.rateBps / 100).toLocaleString('pt-BR')}%` : 'Sem acréscimo'}</span><strong>{formatMoney(details.surchargeCents)}</strong></div>
+      <div className="mt-2 flex justify-between gap-3"><span>{cardRateBps(method, rates) ? `Acréscimo · Stone ${(details.rateBps / 100).toLocaleString('pt-BR')}%` : 'Sem acréscimo'}</span><strong>{formatMoney(details.surchargeCents)}</strong></div>
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[#d9c5eb] pt-3"><strong>Total para cobrar</strong><strong className="text-2xl text-[#653b88]">{formatMoney(details.totalCents)}</strong></div>
-      {cardRateBps(method) > 0 && <p className="mt-2 text-xs leading-5 text-[#6f6179]">{method === 'credit' ? 'Crédito à vista. ' : ''}Acréscimo calculado para receber o valor original após a taxa, arredondado para centavos.</p>}
-    </> : <p>Informe um valor válido para calcular o total{cardRateBps(method) ? ' com a taxa do cartão' : ''}.</p>}
+      {cardRateBps(method, rates) > 0 && <p className="mt-2 text-xs leading-5 text-[#6f6179]">{method === 'credit' ? 'Crédito à vista. ' : ''}Acréscimo calculado para receber o valor original após a taxa, arredondado para centavos.</p>}
+    </> : <p>Informe um valor válido para calcular o total{cardRateBps(method, rates) ? ' com a taxa do cartão' : ''}.</p>}
   </div>;
 }
 
@@ -238,6 +238,11 @@ export default function Home() {
   const [paymentAmount, setPaymentAmount] = useState('');
   const paymentLock = useRef(false);
   const [paymentSaving, setPaymentSaving] = useState(false);
+  const [rates, setRates] = useState<CardRates>(defaultCardRates);
+  const [ratesOpen, setRatesOpen] = useState(false);
+  const [ratesDraft, setRatesDraft] = useState({ credit: '', debit: '' });
+  const [ratesError, setRatesError] = useState('');
+  const [ratesSaving, setRatesSaving] = useState(false);
   const [planReturnToToday, setPlanReturnToToday] = useState(false);
   const [selectedPlanGroupId, setSelectedPlanGroupId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
@@ -270,8 +275,9 @@ export default function Home() {
         setAuthStatus('authorized');
         const response = await fetch('/api/appointments');
         if (!response.ok) throw new Error('request failed');
-        const data = await response.json() as { appointments?: Appointment[]; users?: TeamUser[]; logs?: AuditLog[]; error?: string; blockers?: string[]; pendingCount?: number };
+        const data = await response.json() as { appointments?: Appointment[]; rates?: CardRates };
         setAppointments(data.appointments ?? []);
+        if (data.rates) setRates(data.rates);
       } catch {
         setNotice('Não foi possível carregar a agenda. Tente novamente.');
       } finally {
@@ -334,12 +340,14 @@ export default function Home() {
       const response = await fetch('/api/appointments', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
       });
-      const data = await response.json() as { appointments?: Appointment[]; users?: TeamUser[]; logs?: AuditLog[]; error?: string; blockers?: string[]; pendingCount?: number };
+      const data = await response.json() as { appointments?: Appointment[]; rates?: CardRates; error?: string; blockers?: string[]; pendingCount?: number };
       if (!response.ok) {
+        if (data.rates) setRates(data.rates);
         const blockerMessage = Array.isArray(data.blockers)
           ? `Não é possível apagar: ${data.blockers.join(' e ')}.`
           : data.error === 'plan_incomplete'
             ? `Ainda ${data.pendingCount === 1 ? 'existe 1 banho em aberto' : `existem ${data.pendingCount} banhos em aberto`}. Finalize todas as sessões antes de renovar.`
+            : data.error === 'rates_changed' ? 'As taxas foram atualizadas. Confira o novo total e confirme novamente.'
             : data.error === 'card_amount_required' ? 'Informe o valor do banho ou plano para calcular a taxa do cartão.'
             : data.error === 'invalid_amount' ? 'Informe um valor válido.'
             : 'Não foi possível salvar. Tente novamente.';
@@ -413,6 +421,7 @@ export default function Home() {
     const ok = await mutate({
       action: 'create', ...form,
       amountCents: realToCents(form.amount),
+      expectedRateBps: cardRateBps(form.paymentMethod, rates),
     }, 'Agendamento criado');
     setSavingForm('');
     if (ok) setNewOpen(false);
@@ -485,14 +494,14 @@ export default function Home() {
 
   async function confirmPayment(paymentMethod: Exclude<PaymentMethod, ''>) {
     if (!paymentTarget || paymentLock.current) return;
-    if (cardRateBps(paymentMethod) && !paymentPreview(paymentAmount, paymentMethod)) return;
+    if (['credit', 'debit'].includes(paymentMethod) && !paymentPreview(paymentAmount, paymentMethod, rates)) return;
     paymentLock.current = true;
     setPaymentSaving(true);
     const wasPaid = paymentTarget.paid;
     const ok = await mutate(
       wasPaid
-        ? { action: 'payment_method', id: paymentTarget.id, paymentMethod, amountCents: realToCents(paymentAmount) }
-        : { action: 'paid', id: paymentTarget.id, paid: true, paymentMethod, amountCents: realToCents(paymentAmount) },
+        ? { action: 'payment_method', id: paymentTarget.id, paymentMethod, amountCents: realToCents(paymentAmount), expectedRateBps: cardRateBps(paymentMethod, rates) }
+        : { action: 'paid', id: paymentTarget.id, paid: true, paymentMethod, amountCents: realToCents(paymentAmount), expectedRateBps: cardRateBps(paymentMethod, rates) },
       wasPaid
         ? 'Forma de pagamento atualizada'
         : paymentTarget.planType === 'single' ? 'Pagamento do banho confirmado' : 'Pagamento do plano confirmado',
@@ -502,6 +511,46 @@ export default function Home() {
     if (ok) {
       setPaymentOpen(false);
       setPaymentTarget(null);
+    }
+  }
+
+  async function openRates() {
+    try {
+      const response = await fetch('/api/payment-rates');
+      if (!response.ok) throw new Error('load_failed');
+      const data = await response.json() as { rates: CardRates };
+      setRates(data.rates);
+      setRatesDraft({ credit: (data.rates.credit / 100).toFixed(2).replace('.', ','), debit: (data.rates.debit / 100).toFixed(2).replace('.', ',') });
+      setRatesError('');
+      setRatesOpen(true);
+    } catch {
+      setNotice('Não foi possível carregar as taxas. Tente novamente.');
+      window.setTimeout(() => setNotice(''), 4200);
+    }
+  }
+
+  async function saveRates() {
+    if (ratesSaving) return;
+    const parse = (value: string) => /^\d+(?:[.,]\d{1,2})?$/.test(value.trim()) ? Math.round(Number(value.trim().replace(',', '.')) * 100) : NaN;
+    const next = { credit: parse(ratesDraft.credit), debit: parse(ratesDraft.debit) };
+    if (Object.values(next).some((value) => !Number.isInteger(value) || value < 0 || value >= 10_000)) {
+      setRatesError('Informe taxas entre 0% e 99,99%, com até duas casas decimais.');
+      return;
+    }
+    setRatesSaving(true);
+    setRatesError('');
+    try {
+      const response = await fetch('/api/payment-rates', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) });
+      if (!response.ok) throw new Error('save_failed');
+      const data = await response.json() as { rates: CardRates };
+      setRates(data.rates);
+      setRatesOpen(false);
+      setNotice('Taxas salvas para os próximos pagamentos.');
+      window.setTimeout(() => setNotice(''), 3500);
+    } catch {
+      setRatesError('Não foi possível salvar as taxas. Tente novamente.');
+    } finally {
+      setRatesSaving(false);
     }
   }
 
@@ -664,7 +713,7 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-[#f7f3fb] text-[#302638]">
       <header className="sticky top-0 z-20 border-b border-[#e4dced] bg-[#fffbff]/95 backdrop-blur">
-        <div className="mx-auto flex min-h-16 max-w-[1440px] items-center justify-between gap-2 px-3 py-2.5 sm:h-20 sm:px-6 sm:py-0 lg:px-9">
+        <div className="mx-auto flex min-h-16 max-w-[1440px] flex-wrap items-center justify-between gap-2 px-3 py-2.5 sm:min-h-20 sm:px-6 lg:px-9">
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#7353a6] text-white shadow-sm sm:h-10 sm:w-10"><PawPrint size={20} strokeWidth={2.2} /></span>
             <div className="min-w-0">
@@ -676,6 +725,7 @@ export default function Home() {
             <PwaInstallButton />
             {currentUser?.role === 'admin' && (
               <>
+                <Button variant="ghost" onClick={openRates} title="Alterar taxas da Stone" className="px-2 text-[#7353a6]"><CreditCard /> Taxas</Button>
                 <Button variant="ghost" size="icon-sm" onClick={openLogs} aria-label="Abrir histórico" title="Histórico" className="text-[#685872] sm:h-9 sm:w-9"><History /></Button>
                 <Button variant="ghost" size="icon-sm" onClick={openTeam} aria-label="Gerenciar equipe" title="Equipe" className="text-[#685872] sm:h-9 sm:w-9"><Users /></Button>
               </>
@@ -1077,6 +1127,29 @@ export default function Home() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={ratesOpen} onOpenChange={(open) => { if (!ratesSaving) setRatesOpen(open); }}>
+        <DialogContent className="mobile-sheet border-0 bg-[#fffbff] p-4 sm:max-w-md sm:p-5">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><CreditCard className="text-[#7353a6]" /> Taxas da Stone</DialogTitle>
+            <DialogDescription>Defina os percentuais usados para calcular o valor a cobrar no cartão.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="text-sm font-semibold">Crédito à vista (%)
+              <Input autoFocus disabled={ratesSaving} inputMode="decimal" value={ratesDraft.credit} onChange={(event) => setRatesDraft({ ...ratesDraft, credit: event.target.value })} placeholder="3,08" className="mt-2 h-11 bg-white" />
+            </label>
+            <label className="text-sm font-semibold">Débito (%)
+              <Input disabled={ratesSaving} inputMode="decimal" value={ratesDraft.debit} onChange={(event) => setRatesDraft({ ...ratesDraft, debit: event.target.value })} placeholder="0,87" className="mt-2 h-11 bg-white" />
+            </label>
+          </div>
+          <p className="rounded-xl bg-[#f1ecf7] p-3 text-sm leading-6 text-[#6f6179]">As alterações valem para os próximos pagamentos. Pagamentos já registrados mantêm a taxa original. Pix e dinheiro continuam sem acréscimo.</p>
+          {ratesError && <p role="alert" className="text-sm font-semibold text-red-700">{ratesError}</p>}
+          <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5">
+            <Button variant="outline" disabled={ratesSaving} onClick={() => setRatesOpen(false)}>Cancelar</Button>
+            <Button disabled={ratesSaving} onClick={saveRates}><Check /> {ratesSaving ? 'Salvando...' : 'Salvar taxas'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={paymentOpen} onOpenChange={(open) => {
         if (paymentLock.current) return;
         setPaymentOpen(open);
@@ -1101,17 +1174,17 @@ export default function Home() {
                 aria-pressed={paymentChoice === method}
                 className={`h-auto min-h-12 flex-wrap justify-start whitespace-normal font-bold ${paymentChoice === method ? 'border-[#7353a6] bg-[#eee6f7] text-[#7353a6]' : 'border-[#dfd5e8] bg-white'}`}
               >
-                <CreditCard /> {paymentMethodLabels[method]}{cardRateBps(method) > 0 && <span className="text-xs">{(cardRateBps(method) / 100).toLocaleString('pt-BR')}%{method === 'credit' ? ' · à vista' : ''}</span>}
+                <CreditCard /> {paymentMethodLabels[method]}{['credit', 'debit'].includes(method) && <span className="text-xs">{(cardRateBps(method, rates) / 100).toLocaleString('pt-BR')}%{method === 'credit' ? ' · à vista' : ''}</span>}
               </Button>
             ))}
           </div>
           <label className="block text-sm font-semibold">Valor do banho/plano, sem taxa
             <Input disabled={paymentSaving} inputMode="numeric" value={paymentAmount} onChange={(event) => setPaymentAmount(maskReal(event.target.value))} placeholder="R$ 0,00" className="mt-2 h-11 bg-white" />
           </label>
-          <PaymentSummary amount={paymentAmount} method={paymentChoice} />
+          <PaymentSummary amount={paymentAmount} method={paymentChoice} rates={rates} />
           <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5">
             <Button type="button" variant="outline" disabled={paymentSaving} onClick={() => setPaymentOpen(false)}>Cancelar</Button>
-            <Button type="button" disabled={!paymentChoice || (cardRateBps(paymentChoice) > 0 && !paymentPreview(paymentAmount, paymentChoice))} onClick={() => paymentChoice ? confirmPayment(paymentChoice) : undefined}><Check /> Confirmar recebimento</Button>
+            <Button type="button" disabled={!paymentChoice || (['credit', 'debit'].includes(paymentChoice) && !paymentPreview(paymentAmount, paymentChoice, rates))} onClick={() => paymentChoice ? confirmPayment(paymentChoice) : undefined}><Check /> Confirmar recebimento</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1230,10 +1303,10 @@ export default function Home() {
                 <label className="mt-3 block border-t border-[#eee8f3] pt-3"><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><CreditCard size={14} /> Como foi pago?</span><select required value={form.paymentMethod} onChange={(event) => setForm({ ...form, paymentMethod: event.target.value as PaymentMethod })} className="h-11 w-full rounded-md border border-input bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#7353a6]/30"><option value="">Escolha a forma de pagamento</option><option value="pix">Pix</option><option value="cash">Dinheiro</option><option value="debit">Cartão de débito</option><option value="credit">Cartão de crédito</option></select></label>
               )}
             </div>
-            {form.paid && <PaymentSummary amount={form.amount} method={form.paymentMethod} />}
+            {form.paid && <PaymentSummary amount={form.amount} method={form.paymentMethod} rates={rates} />}
             <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5">
               <Button type="button" variant="outline" onClick={() => setNewOpen(false)}>Cancelar</Button>
-              <Button type="submit" disabled={Boolean(savingForm) || (form.paid && cardRateBps(form.paymentMethod) > 0 && !paymentPreview(form.amount, form.paymentMethod))} className="bg-[#9b6bc2] font-bold text-white hover:bg-[#8254a8]">{savingForm === 'create' ? <LoaderCircle className="animate-spin" /> : <Sparkles />} {savingForm === 'create' ? 'Salvando...' : 'Criar agendamento'}</Button>
+              <Button type="submit" disabled={Boolean(savingForm) || (form.paid && ['credit', 'debit'].includes(form.paymentMethod) && !paymentPreview(form.amount, form.paymentMethod, rates))} className="bg-[#9b6bc2] font-bold text-white hover:bg-[#8254a8]">{savingForm === 'create' ? <LoaderCircle className="animate-spin" /> : <Sparkles />} {savingForm === 'create' ? 'Salvando...' : 'Criar agendamento'}</Button>
             </DialogFooter>
           </form>
         </DialogContent>

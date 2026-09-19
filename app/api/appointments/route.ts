@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { requireAuthorized, writeAudit } from '@/lib/auth';
 import { calculatePayment, cardRateBps, type PaymentBreakdown } from '@/lib/payment';
+import { getCardRates } from '@/lib/payment-rates';
 
 type AppointmentRow = {
   id: string;
@@ -161,7 +162,7 @@ export async function GET(request: Request) {
   const auth = await requireAuthorized(request);
   if (auth.response) return auth.response;
   await ensureSchema();
-  return Response.json({ appointments: await listAppointments() });
+  return Response.json({ appointments: await listAppointments(), rates: await getCardRates() });
 }
 
 export async function POST(request: Request) {
@@ -187,11 +188,15 @@ export async function POST(request: Request) {
     const whatsapp = String(body.whatsapp ?? '');
     const cpf = String(body.cpf ?? '');
     const paymentMethod = body.paid ? String(body.paymentMethod ?? '') : '';
-    if (body.paid && cardRateBps(paymentMethod) && amountCents === null) {
+    const rates = await getCardRates();
+    if (body.paid && ['credit', 'debit'].includes(paymentMethod) && body.expectedRateBps !== cardRateBps(paymentMethod, rates)) {
+      return Response.json({ error: 'rates_changed', rates }, { status: 409 });
+    }
+    if (body.paid && ['credit', 'debit'].includes(paymentMethod) && amountCents === null) {
       return Response.json({ error: 'card_amount_required' }, { status: 400 });
     }
     let paymentDetails: PaymentBreakdown | null;
-    try { paymentDetails = body.paid ? calculatePayment(amountCents, paymentMethod) : null; }
+    try { paymentDetails = body.paid ? calculatePayment(amountCents, paymentMethod, rates) : null; }
     catch { return Response.json({ error: 'invalid_amount' }, { status: 400 }); }
     const legacyName = [ownerName, dogName].filter(Boolean).join(' + ');
     const statements = Array.from({ length: totalSessions }, (_, index) =>
@@ -278,17 +283,21 @@ export async function POST(request: Request) {
     if (row) {
       const paid = action === 'payment_method' ? Boolean(row.paid) : Boolean(body.paid);
       const paymentMethod = paid ? String(body.paymentMethod ?? row.payment_method ?? '') : '';
+      const rates = await getCardRates();
+      if (paid && ['credit', 'debit'].includes(paymentMethod) && body.expectedRateBps !== cardRateBps(paymentMethod, rates)) {
+        return Response.json({ error: 'rates_changed', rates }, { status: 409 });
+      }
       if (paid && !['pix', 'cash', 'debit', 'credit'].includes(paymentMethod)) {
         return Response.json({ error: 'invalid_payment_method' }, { status: 400 });
       }
       const baseCents = paid && body.amountCents !== undefined
         ? body.amountCents === null ? null : Number(body.amountCents)
         : row.amount_cents;
-      if (paid && cardRateBps(paymentMethod) && baseCents === null) {
+      if (paid && ['credit', 'debit'].includes(paymentMethod) && baseCents === null) {
         return Response.json({ error: 'card_amount_required' }, { status: 400 });
       }
       let paymentDetails: PaymentBreakdown | null;
-      try { paymentDetails = paid ? calculatePayment(baseCents, paymentMethod) : null; }
+      try { paymentDetails = paid ? calculatePayment(baseCents, paymentMethod, rates) : null; }
       catch { return Response.json({ error: 'invalid_amount' }, { status: 400 }); }
       await db.prepare('UPDATE appointments SET paid = ?, payment_method = ?, payment_details = ?, amount_cents = CASE WHEN ? = 1 THEN ? ELSE amount_cents END WHERE group_id = ?')
         .bind(paid ? 1 : 0, paymentMethod, paymentDetails ? JSON.stringify(paymentDetails) : null, paid ? 1 : 0, baseCents, row.group_id)
