@@ -1158,7 +1158,7 @@ export default function Home() {
           <fieldset>
             <legend className="mb-2 text-sm font-semibold">Forma de pagamento</legend>
             <div className="grid grid-cols-2 gap-2">
-              {paymentMethods.map((method) => (
+              {paymentMethods.filter((method) => method === 'credit' || method === 'debit').map((method) => (
                 <Button key={method} type="button" variant="outline" onClick={() => setCalculatorMethod(method)} aria-pressed={calculatorMethod === method}
                   className={`h-auto min-h-12 flex-wrap justify-start whitespace-normal font-bold ${calculatorMethod === method ? 'border-[#7353a6] bg-[#eee6f7] text-[#7353a6]' : 'border-[#dfd5e8] bg-white'}`}>
                   <CreditCard /> {paymentMethodLabels[method]}
