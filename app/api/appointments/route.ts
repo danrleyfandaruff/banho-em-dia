@@ -46,6 +46,12 @@ type Appointment = {
   totalSessions: number;
 };
 
+function parsePaymentDetails(value: string | null): PaymentBreakdown | null {
+  if (!value) return null;
+  try { return JSON.parse(value) as PaymentBreakdown; }
+  catch { return null; }
+}
+
 function mapRow(row: AppointmentRow): Appointment {
   let services: string[] = [];
   try {
@@ -65,7 +71,7 @@ function mapRow(row: AppointmentRow): Appointment {
     whatsapp: row.whatsapp || '',
     cpf: row.cpf || '',
     paymentMethod: (row.payment_method || '') as Appointment['paymentMethod'],
-    paymentDetails: row.payment_details ? JSON.parse(row.payment_details) : null,
+    paymentDetails: parsePaymentDetails(row.payment_details),
     planType: row.plan_type as Appointment['planType'],
     amountCents: row.amount_cents,
     paid: Boolean(row.paid),
@@ -198,6 +204,7 @@ export async function POST(request: Request) {
     let paymentDetails: PaymentBreakdown | null;
     try { paymentDetails = body.paid ? calculatePayment(amountCents, paymentMethod, rates) : null; }
     catch { return Response.json({ error: 'invalid_amount' }, { status: 400 }); }
+    const storedAmountCents = paymentDetails?.totalCents ?? amountCents;
     const legacyName = [ownerName, dogName].filter(Boolean).join(' + ');
     const statements = Array.from({ length: totalSessions }, (_, index) =>
       db.prepare(
@@ -216,7 +223,7 @@ export async function POST(request: Request) {
         cpf,
         paymentMethod,
         planType,
-        amountCents,
+        storedAmountCents,
         body.paid ? 1 : 0,
         addDays(startDate, intervalDays * index),
         String(body.scheduledTime ?? '09:00'),
@@ -283,6 +290,7 @@ export async function POST(request: Request) {
     if (row) {
       const paid = action === 'payment_method' ? Boolean(row.paid) : Boolean(body.paid);
       const paymentMethod = paid ? String(body.paymentMethod ?? row.payment_method ?? '') : '';
+      const previousPaymentDetails = parsePaymentDetails(row.payment_details);
       const rates = await getCardRates();
       if (paid && ['credit', 'debit'].includes(paymentMethod) && body.expectedRateBps !== cardRateBps(paymentMethod, rates)) {
         return Response.json({ error: 'rates_changed', rates }, { status: 409 });
@@ -290,17 +298,22 @@ export async function POST(request: Request) {
       if (paid && !['pix', 'cash', 'debit', 'credit'].includes(paymentMethod)) {
         return Response.json({ error: 'invalid_payment_method' }, { status: 400 });
       }
-      const baseCents = paid && body.amountCents !== undefined
-        ? body.amountCents === null ? null : Number(body.amountCents)
-        : row.amount_cents;
+      const baseCents = paid
+        ? body.amountCents !== undefined
+          ? body.amountCents === null ? null : Number(body.amountCents)
+          : previousPaymentDetails?.baseCents ?? row.amount_cents
+        : null;
       if (paid && ['credit', 'debit'].includes(paymentMethod) && baseCents === null) {
         return Response.json({ error: 'card_amount_required' }, { status: 400 });
       }
       let paymentDetails: PaymentBreakdown | null;
       try { paymentDetails = paid ? calculatePayment(baseCents, paymentMethod, rates) : null; }
       catch { return Response.json({ error: 'invalid_amount' }, { status: 400 }); }
-      await db.prepare('UPDATE appointments SET paid = ?, payment_method = ?, payment_details = ?, amount_cents = CASE WHEN ? = 1 THEN ? ELSE amount_cents END WHERE group_id = ?')
-        .bind(paid ? 1 : 0, paymentMethod, paymentDetails ? JSON.stringify(paymentDetails) : null, paid ? 1 : 0, baseCents, row.group_id)
+      const storedAmountCents = paid
+        ? paymentDetails?.totalCents ?? baseCents
+        : previousPaymentDetails?.baseCents ?? row.amount_cents;
+      await db.prepare('UPDATE appointments SET paid = ?, payment_method = ?, payment_details = ?, amount_cents = ? WHERE group_id = ?')
+        .bind(paid ? 1 : 0, paymentMethod, paymentDetails ? JSON.stringify(paymentDetails) : null, storedAmountCents, row.group_id)
         .run();
       await writeAudit(
         auth.user, 'payment_updated', 'appointment_group', row.group_id,
@@ -308,7 +321,8 @@ export async function POST(request: Request) {
         {
           paid,
           paymentMethod,
-          amountCents: baseCents,
+          baseCents,
+          amountCents: storedAmountCents,
           paymentDetails,
           appliesToEntirePlan: row.plan_type !== 'single',
         },
@@ -430,6 +444,7 @@ export async function POST(request: Request) {
     const nextStart = addDays(previous.scheduled_date, intervalDays);
     const groupId = crypto.randomUUID();
     const createdAt = new Date().toISOString();
+    const renewalAmountCents = parsePaymentDetails(previous.payment_details)?.baseCents ?? previous.amount_cents;
     await db.batch(Array.from({ length: totalSessions }, (_, index) =>
       db.prepare(
         `INSERT INTO appointments (
@@ -440,7 +455,7 @@ export async function POST(request: Request) {
       ).bind(
         crypto.randomUUID(), groupId, previous.customer_pet_name, previous.owner_name, previous.dog_name,
         previous.whatsapp, previous.cpf, previous.payment_method, previous.plan_type,
-        previous.amount_cents, addDays(nextStart, intervalDays * index), previous.scheduled_time,
+        renewalAmountCents, addDays(nextStart, intervalDays * index), previous.scheduled_time,
         previousSessions[index]?.services ?? previous.services, index + 1, totalSessions, createdAt,
       ),
     ));
