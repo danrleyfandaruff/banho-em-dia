@@ -342,6 +342,7 @@ export async function POST(request: Request) {
     if (row) {
       const scheduledDate = String(body.scheduledDate ?? row.scheduled_date);
       const dateStatements = await rescheduleStatements(row, scheduledDate);
+      const amountCents = body.amountCents === null || body.amountCents === undefined ? null : Number(body.amountCents);
       await db.batch([
         db.prepare(
           'UPDATE appointments SET customer_pet_name = ?, owner_name = ?, dog_name = ?, whatsapp = ?, cpf = ?, payment_method = ? WHERE group_id = ?',
@@ -355,13 +356,14 @@ export async function POST(request: Request) {
           row.group_id,
         ),
         db.prepare(
-          'UPDATE appointments SET scheduled_time = ?, services = ?, amount_cents = ? WHERE id = ?',
+          'UPDATE appointments SET scheduled_time = ?, services = ? WHERE id = ?',
         ).bind(
           String(body.scheduledTime ?? '09:00'),
           JSON.stringify(Array.isArray(body.services) ? body.services : []),
-          body.amountCents === null || body.amountCents === undefined ? null : Number(body.amountCents),
           id,
         ),
+        db.prepare('UPDATE appointments SET amount_cents = ? WHERE group_id = ?')
+          .bind(amountCents, row.group_id),
         ...dateStatements,
       ]);
       await writeAudit(

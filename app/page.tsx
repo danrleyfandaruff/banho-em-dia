@@ -484,7 +484,10 @@ export default function Home() {
     }
     setPaymentTarget(item);
     setPaymentChoice('');
-    setPaymentAmount(formatMoney(item.amountCents) ?? '');
+    const registeredAmount = item.amountCents
+      ?? appointments.find((appointment) => appointment.groupId === item.groupId && appointment.amountCents !== null)?.amountCents
+      ?? null;
+    setPaymentAmount(formatMoney(registeredAmount) ?? '');
     setPaymentOpen(true);
   }
 
@@ -1226,7 +1229,7 @@ export default function Home() {
               </Button>
             ))}
           </div>
-          <label className="block text-sm font-semibold">Valor do banho/plano, sem taxa
+          <label className="block text-sm font-semibold">Valor cadastrado do banho/plano, sem taxa
             <Input disabled={paymentSaving} inputMode="numeric" value={paymentAmount} onChange={(event) => setPaymentAmount(maskReal(event.target.value))} placeholder="R$ 0,00" className="mt-2 h-11 bg-white" />
           </label>
           <PaymentSummary amount={paymentAmount} method={paymentChoice} rates={rates} />
