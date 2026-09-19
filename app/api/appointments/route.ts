@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { requireAuthorized, writeAudit } from '@/lib/auth';
+import { calculatePayment, cardRateBps, type PaymentBreakdown } from '@/lib/payment';
 
 type AppointmentRow = {
   id: string;
@@ -10,6 +11,7 @@ type AppointmentRow = {
   whatsapp: string;
   cpf: string;
   payment_method: string;
+  payment_details: string | null;
   plan_type: string;
   amount_cents: number | null;
   paid: number;
@@ -31,6 +33,7 @@ type Appointment = {
   whatsapp: string;
   cpf: string;
   paymentMethod: '' | 'pix' | 'cash' | 'debit' | 'credit';
+  paymentDetails: PaymentBreakdown | null;
   planType: 'monthly' | 'fortnightly' | 'single';
   amountCents: number | null;
   paid: boolean;
@@ -61,6 +64,7 @@ function mapRow(row: AppointmentRow): Appointment {
     whatsapp: row.whatsapp || '',
     cpf: row.cpf || '',
     paymentMethod: (row.payment_method || '') as Appointment['paymentMethod'],
+    paymentDetails: row.payment_details ? JSON.parse(row.payment_details) : null,
     planType: row.plan_type as Appointment['planType'],
     amountCents: row.amount_cents,
     paid: Boolean(row.paid),
@@ -183,14 +187,20 @@ export async function POST(request: Request) {
     const whatsapp = String(body.whatsapp ?? '');
     const cpf = String(body.cpf ?? '');
     const paymentMethod = body.paid ? String(body.paymentMethod ?? '') : '';
+    if (body.paid && cardRateBps(paymentMethod) && amountCents === null) {
+      return Response.json({ error: 'card_amount_required' }, { status: 400 });
+    }
+    let paymentDetails: PaymentBreakdown | null;
+    try { paymentDetails = body.paid ? calculatePayment(amountCents, paymentMethod) : null; }
+    catch { return Response.json({ error: 'invalid_amount' }, { status: 400 }); }
     const legacyName = [ownerName, dogName].filter(Boolean).join(' + ');
     const statements = Array.from({ length: totalSessions }, (_, index) =>
       db.prepare(
         `INSERT INTO appointments (
           id, group_id, customer_pet_name, owner_name, dog_name, whatsapp, cpf, payment_method, plan_type, amount_cents, paid,
           scheduled_date, scheduled_time, status, services, session_number,
-          total_sessions, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          total_sessions, created_at, payment_details
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).bind(
         crypto.randomUUID(),
         groupId,
@@ -214,13 +224,14 @@ export async function POST(request: Request) {
         index + 1,
         totalSessions,
         createdAt,
+        paymentDetails ? JSON.stringify(paymentDetails) : null,
       ),
     );
     await db.batch(statements);
     await writeAudit(
       auth.user, 'appointment_created', 'appointment_group', groupId,
       `Criou ${totalSessions === 1 ? 'um banho avulso' : `um plano com ${totalSessions} sessões`} para ${dogName || ownerName || 'cliente sem nome'}`,
-      { planType, totalSessions, startDate, paymentMethod, completedSessions: sessionCompleted.filter(Boolean).length },
+      { planType, totalSessions, startDate, paymentMethod, paymentDetails, completedSessions: sessionCompleted.filter(Boolean).length },
     );
   }
 
@@ -260,42 +271,38 @@ export async function POST(request: Request) {
     }
   }
 
-  if (action === 'paid') {
+  if (action === 'paid' || action === 'payment_method') {
     const row = await db.prepare('SELECT * FROM appointments WHERE id = ?')
       .bind(String(body.id ?? ''))
       .first<AppointmentRow>();
     if (row) {
-      const paid = Boolean(body.paid);
+      const paid = action === 'payment_method' ? Boolean(row.paid) : Boolean(body.paid);
       const paymentMethod = paid ? String(body.paymentMethod ?? row.payment_method ?? '') : '';
-      await db.prepare('UPDATE appointments SET paid = ?, payment_method = ? WHERE group_id = ?')
-        .bind(paid ? 1 : 0, paymentMethod, row.group_id)
+      if (paid && !['pix', 'cash', 'debit', 'credit'].includes(paymentMethod)) {
+        return Response.json({ error: 'invalid_payment_method' }, { status: 400 });
+      }
+      const baseCents = paid && body.amountCents !== undefined
+        ? body.amountCents === null ? null : Number(body.amountCents)
+        : row.amount_cents;
+      if (paid && cardRateBps(paymentMethod) && baseCents === null) {
+        return Response.json({ error: 'card_amount_required' }, { status: 400 });
+      }
+      let paymentDetails: PaymentBreakdown | null;
+      try { paymentDetails = paid ? calculatePayment(baseCents, paymentMethod) : null; }
+      catch { return Response.json({ error: 'invalid_amount' }, { status: 400 }); }
+      await db.prepare('UPDATE appointments SET paid = ?, payment_method = ?, payment_details = ?, amount_cents = CASE WHEN ? = 1 THEN ? ELSE amount_cents END WHERE group_id = ?')
+        .bind(paid ? 1 : 0, paymentMethod, paymentDetails ? JSON.stringify(paymentDetails) : null, paid ? 1 : 0, baseCents, row.group_id)
         .run();
       await writeAudit(
         auth.user, 'payment_updated', 'appointment_group', row.group_id,
-        `${body.paid ? 'Confirmou' : 'Desmarcou'} o pagamento ${row.plan_type === 'single' ? 'do banho avulso' : 'do plano'} de ${appointmentName(row)}`,
+        `${paid ? 'Confirmou' : 'Desmarcou'} o pagamento ${row.plan_type === 'single' ? 'do banho avulso' : 'do plano'} de ${appointmentName(row)}${paymentDetails ? ` · total ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(paymentDetails.totalCents / 100)}${paymentDetails.rateBps ? ` (Stone ${paymentDetails.rateBps / 100}%)` : ''}` : ''}`,
         {
-          paid: Boolean(body.paid),
+          paid,
           paymentMethod,
-          amountCents: row.amount_cents,
+          amountCents: baseCents,
+          paymentDetails,
           appliesToEntirePlan: row.plan_type !== 'single',
         },
-      );
-    }
-  }
-
-  if (action === 'payment_method') {
-    const row = await db.prepare('SELECT * FROM appointments WHERE id = ?')
-      .bind(String(body.id ?? ''))
-      .first<AppointmentRow>();
-    if (row) {
-      const paymentMethod = String(body.paymentMethod ?? '');
-      await db.prepare('UPDATE appointments SET payment_method = ? WHERE group_id = ?')
-        .bind(paymentMethod, row.group_id)
-        .run();
-      await writeAudit(
-        auth.user, 'payment_method_updated', 'appointment_group', row.group_id,
-        `Atualizou a forma de pagamento de ${appointmentName(row)}`,
-        { from: row.payment_method, to: paymentMethod },
       );
     }
   }

@@ -11,6 +11,7 @@ export const appointments = sqliteTable(
     whatsapp: text('whatsapp').notNull().default(''),
     cpf: text('cpf').notNull().default(''),
     paymentMethod: text('payment_method').notNull().default(''),
+    paymentDetails: text('payment_details'),
     planType: text('plan_type').notNull(),
     amountCents: integer('amount_cents'),
     paid: integer('paid', { mode: 'boolean' }).notNull().default(false),

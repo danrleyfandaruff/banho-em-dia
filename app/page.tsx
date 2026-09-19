@@ -20,6 +20,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { PwaInstallButton } from '@/components/pwa-install-button';
+import { calculatePayment, cardRateBps, type PaymentBreakdown } from '@/lib/payment';
 
 type PlanType = 'monthly' | 'fortnightly' | 'single';
 type Status = 'scheduled' | 'completed' | 'absent';
@@ -55,6 +56,7 @@ type Appointment = {
   whatsapp: string;
   cpf: string;
   paymentMethod: PaymentMethod;
+  paymentDetails: PaymentBreakdown | null;
   planType: PlanType;
   amountCents: number | null;
   paid: boolean;
@@ -160,6 +162,29 @@ function maskReal(value: string) {
   return formatMoney(Number(digits)) ?? '';
 }
 
+function paymentPreview(amount: string, method: PaymentMethod) {
+  try { return calculatePayment(realToCents(amount), method); }
+  catch { return null; }
+}
+
+function PaymentSummary({ amount, method }: { amount: string; method: PaymentMethod }) {
+  const details = paymentPreview(amount, method);
+  if (!method) return null;
+  return <div className="rounded-xl border border-[#d9c5eb] bg-[#f3eafa] p-4 text-sm" aria-live="polite">
+    {details ? <>
+      <div className="flex justify-between gap-3"><span>Valor do banho/plano</span><strong>{formatMoney(details.baseCents)}</strong></div>
+      <div className="mt-2 flex justify-between gap-3"><span>{cardRateBps(method) ? `Acréscimo · Stone ${(details.rateBps / 100).toLocaleString('pt-BR')}%` : 'Sem acréscimo'}</span><strong>{formatMoney(details.surchargeCents)}</strong></div>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[#d9c5eb] pt-3"><strong>Total para cobrar</strong><strong className="text-2xl text-[#653b88]">{formatMoney(details.totalCents)}</strong></div>
+      {cardRateBps(method) > 0 && <p className="mt-2 text-xs leading-5 text-[#6f6179]">{method === 'credit' ? 'Crédito à vista. ' : ''}Acréscimo calculado para receber o valor original após a taxa, arredondado para centavos.</p>}
+    </> : <p>Informe um valor válido para calcular o total{cardRateBps(method) ? ' com a taxa do cartão' : ''}.</p>}
+  </div>;
+}
+
+function PaidTotal({ item }: { item: Appointment }) {
+  if (!item.paid || !item.paymentDetails || !cardRateBps(item.paymentMethod)) return null;
+  return <p className="mt-1 text-xs font-bold text-[#4f765c]">Cobrado no cartão: {formatMoney(item.paymentDetails.totalCents)} · acréscimo {formatMoney(item.paymentDetails.surchargeCents)}</p>;
+}
+
 function realToCents(value: string) {
   const digits = value.replace(/\D/g, '');
   return digits ? Number(digits) : null;
@@ -209,6 +234,10 @@ export default function Home() {
   const [todayOpen, setTodayOpen] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [paymentTarget, setPaymentTarget] = useState<Appointment | null>(null);
+  const [paymentChoice, setPaymentChoice] = useState<PaymentMethod>('');
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const paymentLock = useRef(false);
+  const [paymentSaving, setPaymentSaving] = useState(false);
   const [planReturnToToday, setPlanReturnToToday] = useState(false);
   const [selectedPlanGroupId, setSelectedPlanGroupId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
@@ -311,6 +340,8 @@ export default function Home() {
           ? `Não é possível apagar: ${data.blockers.join(' e ')}.`
           : data.error === 'plan_incomplete'
             ? `Ainda ${data.pendingCount === 1 ? 'existe 1 banho em aberto' : `existem ${data.pendingCount} banhos em aberto`}. Finalize todas as sessões antes de renovar.`
+            : data.error === 'card_amount_required' ? 'Informe o valor do banho ou plano para calcular a taxa do cartão.'
+            : data.error === 'invalid_amount' ? 'Informe um valor válido.'
             : 'Não foi possível salvar. Tente novamente.';
         setNotice(blockerMessage);
         window.setTimeout(() => setNotice(''), 4200);
@@ -440,25 +471,34 @@ export default function Home() {
       );
     }
     setPaymentTarget(item);
+    setPaymentChoice('');
+    setPaymentAmount(formatMoney(item.amountCents) ?? '');
     setPaymentOpen(true);
   }
 
   function editPaymentMethod(item: Appointment) {
     setPaymentTarget(item);
+    setPaymentChoice(item.paymentMethod);
+    setPaymentAmount(formatMoney(item.paymentDetails?.baseCents ?? item.amountCents) ?? '');
     setPaymentOpen(true);
   }
 
   async function confirmPayment(paymentMethod: Exclude<PaymentMethod, ''>) {
-    if (!paymentTarget) return;
+    if (!paymentTarget || paymentLock.current) return;
+    if (cardRateBps(paymentMethod) && !paymentPreview(paymentAmount, paymentMethod)) return;
+    paymentLock.current = true;
+    setPaymentSaving(true);
     const wasPaid = paymentTarget.paid;
     const ok = await mutate(
       wasPaid
-        ? { action: 'payment_method', id: paymentTarget.id, paymentMethod }
-        : { action: 'paid', id: paymentTarget.id, paid: true, paymentMethod },
+        ? { action: 'payment_method', id: paymentTarget.id, paymentMethod, amountCents: realToCents(paymentAmount) }
+        : { action: 'paid', id: paymentTarget.id, paid: true, paymentMethod, amountCents: realToCents(paymentAmount) },
       wasPaid
         ? 'Forma de pagamento atualizada'
         : paymentTarget.planType === 'single' ? 'Pagamento do banho confirmado' : 'Pagamento do plano confirmado',
     );
+    paymentLock.current = false;
+    setPaymentSaving(false);
     if (ok) {
       setPaymentOpen(false);
       setPaymentTarget(null);
@@ -792,6 +832,7 @@ export default function Home() {
                                 </div>
                                 <p className="flex flex-wrap items-center gap-x-1.5 text-sm text-[#7d7087]"><Scissors size={14} /> {item.services.length ? item.services.join(' · ') : 'Sem serviços definidos'}</p>
                                 {item.planType !== 'single' && <p className="mt-1.5 text-[11px] font-semibold text-[#92849c]">{stats.completed} concluídas · {stats.absent} faltas</p>}
+                                <PaidTotal item={item} />
                               </div>
                               <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center sm:justify-end sm:gap-1.5">
                                 <div className="col-span-2 flex items-center gap-1 sm:contents">
@@ -894,6 +935,7 @@ export default function Home() {
                     <span className={`rounded-full px-2.5 py-1 text-[11px] font-extrabold ${item.status === 'completed' ? 'bg-[#e8f4eb] text-[#4f765c]' : item.status === 'absent' ? 'bg-[#f7e7e2] text-[#ad533d]' : 'bg-[#f1edf5] text-[#776a80]'}`}>{statusLabels[item.status]}</span>
                   </div>
                   <p className="mt-3 flex flex-wrap items-center gap-x-1.5 text-xs text-[#7d7087]"><Scissors size={13} /> {item.services.length ? item.services.join(' · ') : 'Sem serviços definidos'}</p>
+                  <PaidTotal item={item} />
                   <div className="mt-3 grid grid-cols-2 gap-2 border-t border-[#eee8f3] pt-3 sm:flex sm:flex-wrap sm:items-center sm:gap-1.5">
                     {item.whatsapp && <a href={whatsappUrl(item.whatsapp)} target="_blank" rel="noreferrer" className="flex h-11 items-center justify-center gap-2 rounded-lg bg-[#e6f7eb] px-3 text-xs font-bold text-[#1e8b4c] sm:grid sm:h-8 sm:w-8 sm:p-0" aria-label="Abrir WhatsApp"><MessageCircle size={16} /><span className="sm:hidden">WhatsApp</span></a>}
                     <Button variant="outline" size="sm" onClick={() => editFromOverview(item)} className="h-11 w-full sm:h-8 sm:w-auto"><Pencil /> Editar</Button>
@@ -959,6 +1001,7 @@ export default function Home() {
                 </Button>
                 <Button variant="outline" onClick={deleteFromPlan} className="h-11 w-full border-[#ead0cc] font-bold text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f] sm:h-9 sm:w-auto"><Trash2 /> Apagar plano</Button>
               </div>
+              <PaidTotal item={selectedPlanHead} />
             </div>
           )}
           <div className="space-y-2.5">
@@ -1035,6 +1078,7 @@ export default function Home() {
       </Dialog>
 
       <Dialog open={paymentOpen} onOpenChange={(open) => {
+        if (paymentLock.current) return;
         setPaymentOpen(open);
         if (!open) setPaymentTarget(null);
       }}>
@@ -1052,14 +1096,23 @@ export default function Home() {
                 type="button"
                 variant="outline"
 
-                onClick={() => confirmPayment(method)}
-                className={`h-12 justify-start font-bold ${paymentTarget?.paymentMethod === method ? 'border-[#7353a6] bg-[#eee6f7] text-[#7353a6]' : 'border-[#dfd5e8] bg-white'}`}
+                disabled={paymentSaving}
+                onClick={() => setPaymentChoice(method)}
+                aria-pressed={paymentChoice === method}
+                className={`h-auto min-h-12 flex-wrap justify-start whitespace-normal font-bold ${paymentChoice === method ? 'border-[#7353a6] bg-[#eee6f7] text-[#7353a6]' : 'border-[#dfd5e8] bg-white'}`}
               >
-                <CreditCard /> {paymentMethodLabels[method]}
+                <CreditCard /> {paymentMethodLabels[method]}{cardRateBps(method) > 0 && <span className="text-xs">{(cardRateBps(method) / 100).toLocaleString('pt-BR')}%{method === 'credit' ? ' · à vista' : ''}</span>}
               </Button>
             ))}
           </div>
-          <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5"><Button type="button" variant="outline"  onClick={() => setPaymentOpen(false)}>Cancelar</Button></DialogFooter>
+          <label className="block text-sm font-semibold">Valor do banho/plano, sem taxa
+            <Input disabled={paymentSaving} inputMode="numeric" value={paymentAmount} onChange={(event) => setPaymentAmount(maskReal(event.target.value))} placeholder="R$ 0,00" className="mt-2 h-11 bg-white" />
+          </label>
+          <PaymentSummary amount={paymentAmount} method={paymentChoice} />
+          <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5">
+            <Button type="button" variant="outline" disabled={paymentSaving} onClick={() => setPaymentOpen(false)}>Cancelar</Button>
+            <Button type="button" disabled={!paymentChoice || (cardRateBps(paymentChoice) > 0 && !paymentPreview(paymentAmount, paymentChoice))} onClick={() => paymentChoice ? confirmPayment(paymentChoice) : undefined}><Check /> Confirmar recebimento</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -1177,9 +1230,10 @@ export default function Home() {
                 <label className="mt-3 block border-t border-[#eee8f3] pt-3"><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><CreditCard size={14} /> Como foi pago?</span><select required value={form.paymentMethod} onChange={(event) => setForm({ ...form, paymentMethod: event.target.value as PaymentMethod })} className="h-11 w-full rounded-md border border-input bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#7353a6]/30"><option value="">Escolha a forma de pagamento</option><option value="pix">Pix</option><option value="cash">Dinheiro</option><option value="debit">Cartão de débito</option><option value="credit">Cartão de crédito</option></select></label>
               )}
             </div>
+            {form.paid && <PaymentSummary amount={form.amount} method={form.paymentMethod} />}
             <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5">
               <Button type="button" variant="outline" onClick={() => setNewOpen(false)}>Cancelar</Button>
-              <Button type="submit" disabled={Boolean(savingForm)} className="bg-[#9b6bc2] font-bold text-white hover:bg-[#8254a8]">{savingForm === 'create' ? <LoaderCircle className="animate-spin" /> : <Sparkles />} {savingForm === 'create' ? 'Salvando...' : 'Criar agendamento'}</Button>
+              <Button type="submit" disabled={Boolean(savingForm) || (form.paid && cardRateBps(form.paymentMethod) > 0 && !paymentPreview(form.amount, form.paymentMethod))} className="bg-[#9b6bc2] font-bold text-white hover:bg-[#8254a8]">{savingForm === 'create' ? <LoaderCircle className="animate-spin" /> : <Sparkles />} {savingForm === 'create' ? 'Salvando...' : 'Criar agendamento'}</Button>
             </DialogFooter>
           </form>
         </DialogContent>

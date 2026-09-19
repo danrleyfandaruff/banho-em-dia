@@ -29,6 +29,13 @@
       "when": 1788910017088,
       "tag": "0003_add_payment_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1789827741216,
+      "tag": "0004_mute_gauntlet",
+      "breakpoints": true
     }
   ]
 }
