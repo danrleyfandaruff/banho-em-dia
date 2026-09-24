@@ -129,6 +129,13 @@ function addDays(dateString: string, amount: number) {
   return localDateString(date);
 }
 
+function sessionDatesFor(planType: PlanType, startDate: string) {
+  return Array.from(
+    { length: totalSessionsFor(planType) },
+    (_, index) => addDays(startDate, intervalDaysFor(planType) * index),
+  );
+}
+
 function addMonths(monthString: string, amount: number) {
   const [year, month] = monthString.split('-').map(Number);
   const date = new Date(year, month - 1 + amount, 1, 12);
@@ -210,10 +217,11 @@ function whatsappUrl(value: string) {
   return `https://wa.me/${internationalNumber}`;
 }
 
-const emptyForm = () => ({
+const emptyForm = (scheduledDate = localDateString()) => ({
   ownerName: '', dogName: '', whatsapp: '', cpf: '', paymentMethod: '' as PaymentMethod,
   planType: 'monthly' as PlanType, amount: '', paid: false,
-  scheduledDate: localDateString(), scheduledTime: '09:00',
+  scheduledDate, scheduledTime: '09:00',
+  sessionDates: sessionDatesFor('monthly', scheduledDate),
   sessionServices: Array.from({ length: 4 }, () => ['Banho']),
   sessionCompleted: Array.from({ length: 4 }, () => false),
 });
@@ -251,6 +259,9 @@ export default function Home() {
   const [form, setForm] = useState(emptyForm);
   const [activeServiceSession, setActiveServiceSession] = useState(0);
   const [editing, setEditing] = useState<Appointment | null>(null);
+  const [editingOriginalDate, setEditingOriginalDate] = useState('');
+  const [editDateChoiceOpen, setEditDateChoiceOpen] = useState(false);
+  const [pendingMove, setPendingMove] = useState<{ item: Appointment; scheduledDate: string } | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(() => localDateString().slice(0, 7));
   const [notice, setNotice] = useState('');
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -406,7 +417,7 @@ export default function Home() {
   }
 
   function openNew(date = today) {
-    setForm({ ...emptyForm(), scheduledDate: date });
+    setForm(emptyForm(date));
     setActiveServiceSession(0);
     setNewOpen(true);
   }
@@ -441,6 +452,7 @@ export default function Home() {
 
   function openEdit(item: Appointment) {
     setEditing({ ...item });
+    setEditingOriginalDate(item.scheduledDate);
     setEditOpen(true);
   }
 
@@ -584,18 +596,35 @@ export default function Home() {
     }
   }
 
-  async function saveEdit(event: FormEvent) {
-    event.preventDefault();
+  async function persistEdit(recalculateFutureDates: boolean) {
     if (!editing || savingForm) return;
     setSavingForm('edit');
+    const dateChanged = editing.scheduledDate !== editingOriginalDate;
     const ok = await mutate({
       action: 'edit', id: editing.id, ownerName: editing.ownerName, dogName: editing.dogName,
       whatsapp: editing.whatsapp, cpf: editing.cpf, paymentMethod: editing.paymentMethod,
       scheduledDate: editing.scheduledDate, scheduledTime: editing.scheduledTime,
-      services: editing.services, amountCents: editing.amountCents,
-    }, editing.planType === 'single' ? 'Atendimento atualizado' : 'Atendimento e próximas sessões atualizados');
+      services: editing.services, amountCents: editing.amountCents, recalculateFutureDates,
+    }, dateChanged && recalculateFutureDates
+      ? 'Atendimento e próximas sessões atualizados'
+      : 'Atendimento atualizado');
     setSavingForm('');
-    if (ok) setEditOpen(false);
+    if (ok) {
+      setEditDateChoiceOpen(false);
+      setEditOpen(false);
+    }
+    return ok;
+  }
+
+  async function saveEdit(event: FormEvent) {
+    event.preventDefault();
+    if (!editing || savingForm) return;
+    const hasFutureSessions = editing.planType !== 'single' && editing.sessionNumber < editing.totalSessions;
+    if (hasFutureSessions && editing.scheduledDate !== editingOriginalDate) {
+      setEditDateChoiceOpen(true);
+      return;
+    }
+    await persistEdit(false);
   }
 
   async function deleteAppointment() {
@@ -620,6 +649,16 @@ export default function Home() {
     if (card instanceof HTMLElement) event.dataTransfer.setDragImage(card, 22, 22);
   }
 
+  async function moveAppointment(item: Appointment, scheduledDate: string, recalculateFutureDates: boolean) {
+    const ok = await mutate(
+      { action: 'move', id: item.id, scheduledDate, recalculateFutureDates },
+      recalculateFutureDates
+        ? `Movido para ${prettyDate(scheduledDate)} e próximas sessões recalculadas`
+        : `Movido para ${prettyDate(scheduledDate)}`,
+    );
+    if (ok) setPendingMove(null);
+  }
+
   async function dropOnDay(event: DragEvent<HTMLElement>, scheduledDate: string) {
     event.preventDefault();
     const id = draggingId || event.dataTransfer.getData('text/plain');
@@ -627,8 +666,11 @@ export default function Home() {
     setDropTarget(null);
     const item = appointments.find((appointment) => appointment.id === id);
     if (!item || item.scheduledDate === scheduledDate) return;
-
-    await mutate({ action: 'move', id, scheduledDate }, `Movido para ${prettyDate(scheduledDate)}`);
+    if (item.planType !== 'single' && item.sessionNumber < item.totalSessions) {
+      setPendingMove({ item, scheduledDate });
+      return;
+    }
+    await moveAppointment(item, scheduledDate, false);
   }
 
   async function openTeam() {
@@ -1253,7 +1295,7 @@ export default function Home() {
         <DialogContent className="mobile-sheet max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-4 sm:max-w-xl sm:p-5">
           <DialogHeader>
             <DialogTitle className="font-heading text-xl font-extrabold tracking-[-0.03em]">Novo agendamento</DialogTitle>
-            <DialogDescription>Cadastre o plano e o primeiro banho. Os próximos entram sozinhos no mesmo dia da semana.</DialogDescription>
+            <DialogDescription>Defina o primeiro banho e, se precisar, escolha uma data diferente para cada sessão.</DialogDescription>
           </DialogHeader>
           <form onSubmit={createAppointment} className="space-y-5">
             <div className="grid gap-3 sm:grid-cols-3">
@@ -1284,6 +1326,7 @@ export default function Home() {
                           { length: count },
                           (_, index) => form.sessionCompleted[index] ?? false,
                         ),
+                        sessionDates: sessionDatesFor(plan, form.scheduledDate),
                       });
                       setActiveServiceSession(0);
                     }}
@@ -1295,13 +1338,16 @@ export default function Home() {
               </div>
             </div>
             <div className="grid gap-3 sm:grid-cols-3">
-              <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Primeiro banho</span><Input type="date" value={form.scheduledDate} onChange={(event) => setForm({ ...form, scheduledDate: event.target.value })} className="h-11 bg-white" /></label>
+              <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Primeiro banho</span><Input type="date" value={form.scheduledDate} onChange={(event) => {
+                const scheduledDate = event.target.value;
+                setForm({ ...form, scheduledDate, sessionDates: sessionDatesFor(form.planType, scheduledDate) });
+              }} className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Horário</span><Input type="time" value={form.scheduledTime} onChange={(event) => setForm({ ...form, scheduledTime: event.target.value })} className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Valor (opcional)</span><Input inputMode="numeric" value={form.amount} onChange={(event) => setForm({ ...form, amount: maskReal(event.target.value) })} placeholder="R$ 0,00" className="h-11 bg-white font-semibold tabular-nums" /></label>
             </div>
             <div className="min-w-0 rounded-2xl border border-[#e4dced] bg-white p-3.5">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <span className="flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><Scissors size={14} /> Serviços por sessão</span>
+                <span className="flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><Scissors size={14} /> Datas e serviços por sessão</span>
                 {totalSessionsFor(form.planType) > 1 && (
                   <button
                     type="button"
@@ -1314,13 +1360,13 @@ export default function Home() {
                     }}
                     className="text-[11px] font-extrabold text-[#7353a6] hover:underline"
                   >
-                    Repetir em todas
+                    Repetir serviços em todas
                   </button>
                 )}
               </div>
               <div className="mb-3 flex max-w-full gap-2 overflow-x-auto pb-1">
                 {Array.from({ length: totalSessionsFor(form.planType) }, (_, index) => {
-                  const date = addDays(form.scheduledDate, intervalDaysFor(form.planType) * index);
+                  const date = form.sessionDates[index] ?? addDays(form.scheduledDate, intervalDaysFor(form.planType) * index);
                   return (
                     <button
                       type="button"
@@ -1334,6 +1380,19 @@ export default function Home() {
                   );
                 })}
               </div>
+              <label className="mb-3 block rounded-xl border border-[#e4dced] bg-[#faf7fc] p-3">
+                <span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><CalendarDays size={14} /> Data da sessão {activeServiceSession + 1}</span>
+                <Input type="date" value={form.sessionDates[activeServiceSession] ?? form.scheduledDate} onChange={(event) => {
+                  const sessionDates = [...form.sessionDates];
+                  sessionDates[activeServiceSession] = event.target.value;
+                  setForm({
+                    ...form,
+                    sessionDates,
+                    scheduledDate: activeServiceSession === 0 ? event.target.value : form.scheduledDate,
+                  });
+                }} className="h-11 bg-white" />
+                <small className="mt-1.5 block text-xs text-[#85768f]">Você pode escolher um dia diferente para cada banho.</small>
+              </label>
               <label className="mb-3 flex cursor-pointer items-start gap-3 rounded-xl border border-[#e4dced] bg-[#faf7fc] p-3">
                 <Checkbox
                   checked={form.sessionCompleted[activeServiceSession] ?? false}
@@ -1372,9 +1431,9 @@ export default function Home() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+      <Dialog open={editOpen} onOpenChange={(open) => { setEditOpen(open); if (!open) setEditDateChoiceOpen(false); }}>
         <DialogContent className="mobile-sheet max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-4 sm:max-w-lg sm:p-5">
-          <DialogHeader><DialogTitle className="font-heading text-xl font-extrabold">Editar atendimento</DialogTitle><DialogDescription>{editing?.planType === 'single' ? 'Altere os detalhes deste atendimento.' : 'Ao mudar a data, as próximas sessões do plano acompanham automaticamente.'}</DialogDescription></DialogHeader>
+          <DialogHeader><DialogTitle className="font-heading text-xl font-extrabold">Editar atendimento</DialogTitle><DialogDescription>{editing?.planType === 'single' ? 'Altere os detalhes deste atendimento.' : 'Ao mudar a data, você escolhe se altera somente esta sessão ou também recalcula as próximas.'}</DialogDescription></DialogHeader>
           {editing && <form onSubmit={saveEdit} className="space-y-5">
             <div className="grid gap-3 sm:grid-cols-2">
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Nome do dono</span><Input value={editing.ownerName} onChange={(event) => setEditing({ ...editing, ownerName: event.target.value })} className="h-11 bg-white" /></label>
@@ -1400,6 +1459,40 @@ export default function Home() {
           </form>}
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={editDateChoiceOpen} onOpenChange={(open) => { if (!savingForm) setEditDateChoiceOpen(open); }}>
+        <AlertDialogContent className="mobile-alert max-w-[calc(100%-1.5rem)] border-0 bg-[#fffbff]">
+          <AlertDialogHeader>
+            <AlertDialogMedia className="bg-[#eee6f7] text-[#7353a6]"><CalendarDays /></AlertDialogMedia>
+            <AlertDialogTitle className="font-heading font-extrabold">Recalcular as próximas sessões?</AlertDialogTitle>
+            <AlertDialogDescription>
+              A sessão {editing?.sessionNumber} foi alterada para {editing ? prettyDate(editing.scheduledDate) : ''}. Você pode mudar somente este banho ou reorganizar os seguintes a cada {editing?.planType === 'monthly' ? '7' : '14'} dias.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={Boolean(savingForm)}>Voltar</AlertDialogCancel>
+            <Button variant="outline" disabled={Boolean(savingForm)} onClick={() => persistEdit(false)}>Somente esta sessão</Button>
+            <Button disabled={Boolean(savingForm)} onClick={() => persistEdit(true)}><RefreshCw /> Recalcular próximas</Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={Boolean(pendingMove)} onOpenChange={(open) => { if (!open) setPendingMove(null); }}>
+        <AlertDialogContent className="mobile-alert max-w-[calc(100%-1.5rem)] border-0 bg-[#fffbff]">
+          <AlertDialogHeader>
+            <AlertDialogMedia className="bg-[#eee6f7] text-[#7353a6]"><CalendarDays /></AlertDialogMedia>
+            <AlertDialogTitle className="font-heading font-extrabold">Recalcular as próximas sessões?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Você moveu a sessão {pendingMove?.item.sessionNumber} para {pendingMove ? prettyDate(pendingMove.scheduledDate) : ''}. Escolha se deseja mover somente ela ou recalcular os banhos seguintes.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <Button variant="outline" onClick={() => pendingMove ? moveAppointment(pendingMove.item, pendingMove.scheduledDate, false) : undefined}>Somente esta sessão</Button>
+            <Button onClick={() => pendingMove ? moveAppointment(pendingMove.item, pendingMove.scheduledDate, true) : undefined}><RefreshCw /> Recalcular próximas</Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent className="mobile-alert max-w-[calc(100%-1.5rem)] border-0 bg-[#fffbff]">

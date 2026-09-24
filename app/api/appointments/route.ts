@@ -147,16 +147,16 @@ async function futureSessions(target: AppointmentRow) {
   ).bind(target.group_id, target.session_number).all<{ id: string; session_number: number }>();
 }
 
-async function rescheduleStatements(target: AppointmentRow, scheduledDate: string) {
+async function rescheduleStatements(target: AppointmentRow, scheduledDate: string, recalculateFutureDates = true) {
   const later = await futureSessions(target);
   const intervalDays = intervalForPlan(target.plan_type);
   return [
     env.DB.prepare('UPDATE appointments SET scheduled_date = ? WHERE id = ?')
       .bind(scheduledDate, target.id),
-    ...later.results.map((session) =>
+    ...(recalculateFutureDates ? later.results.map((session) =>
       env.DB.prepare('UPDATE appointments SET scheduled_date = ? WHERE id = ?')
         .bind(addDays(scheduledDate, intervalDays * (session.session_number - target.session_number)), session.id),
-    ),
+    ) : []),
   ];
 }
 
@@ -186,6 +186,11 @@ export async function POST(request: Request) {
     const groupId = crypto.randomUUID();
     const createdAt = new Date().toISOString();
     const startDate = String(body.scheduledDate ?? createdAt.slice(0, 10));
+    const requestedSessionDates = Array.isArray(body.sessionDates) ? body.sessionDates.map(String) : [];
+    const sessionDates = Array.from({ length: totalSessions }, (_, index) =>
+      /^\d{4}-\d{2}-\d{2}$/.test(requestedSessionDates[index] ?? '')
+        ? requestedSessionDates[index]
+        : addDays(startDate, intervalDays * index));
     const amountCents = body.amountCents === null || body.amountCents === undefined ? null : Number(body.amountCents);
     const sessionServices = Array.isArray(body.sessionServices) ? body.sessionServices : [];
     const sessionCompleted = Array.isArray(body.sessionCompleted) ? body.sessionCompleted.map(Boolean) : [];
@@ -227,7 +232,7 @@ export async function POST(request: Request) {
         planType,
         storedAmountCents,
         body.paid ? 1 : 0,
-        addDays(startDate, intervalDays * index),
+        sessionDates[index],
         String(body.scheduledTime ?? '09:00'),
         sessionCompleted[index] ? 'completed' : 'scheduled',
         JSON.stringify(
@@ -245,7 +250,11 @@ export async function POST(request: Request) {
     await writeAudit(
       auth.user, 'appointment_created', 'appointment_group', groupId,
       `Criou ${totalSessions === 1 ? 'um banho avulso' : `um plano com ${totalSessions} sessões`} para ${dogName || ownerName || 'cliente sem nome'}`,
-      { planType, totalSessions, startDate, paymentMethod, paymentDetails, completedSessions: sessionCompleted.filter(Boolean).length },
+      {
+        planType, totalSessions, startDate, paymentMethod, paymentDetails,
+        sessionDates,
+        completedSessions: sessionCompleted.filter(Boolean).length,
+      },
     );
   }
 
@@ -340,12 +349,13 @@ export async function POST(request: Request) {
       .first<AppointmentRow>();
     if (target) {
       const scheduledDate = String(body.scheduledDate ?? target.scheduled_date);
-      const statements = await rescheduleStatements(target, scheduledDate);
+      const recalculateFutureDates = body.recalculateFutureDates !== false;
+      const statements = await rescheduleStatements(target, scheduledDate, recalculateFutureDates);
       await db.batch(statements);
       await writeAudit(
         auth.user, 'appointment_moved', 'appointment', target.id,
         `Moveu o atendimento de ${appointmentName(target)} de ${target.scheduled_date} para ${scheduledDate}`,
-        { from: target.scheduled_date, to: scheduledDate, futureSessionsUpdated: statements.length - 1 },
+        { from: target.scheduled_date, to: scheduledDate, futureSessionsUpdated: statements.length - 1, recalculateFutureDates },
       );
     }
   }
@@ -359,7 +369,8 @@ export async function POST(request: Request) {
       .first<AppointmentRow>();
     if (row) {
       const scheduledDate = String(body.scheduledDate ?? row.scheduled_date);
-      const dateStatements = await rescheduleStatements(row, scheduledDate);
+      const recalculateFutureDates = body.recalculateFutureDates !== false;
+      const dateStatements = await rescheduleStatements(row, scheduledDate, recalculateFutureDates);
       const amountCents = body.amountCents === null || body.amountCents === undefined ? null : Number(body.amountCents);
       await db.batch([
         db.prepare(
@@ -392,6 +403,7 @@ export async function POST(request: Request) {
           scheduledDate,
           sessionNumber: row.session_number,
           futureSessionsUpdated: dateStatements.length - 1,
+          recalculateFutureDates,
           paymentMethod: String(body.paymentMethod ?? ''),
         },
       );
