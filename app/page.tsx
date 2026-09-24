@@ -1383,15 +1383,24 @@ export default function Home() {
               <label className="mb-3 block rounded-xl border border-[#e4dced] bg-[#faf7fc] p-3">
                 <span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><CalendarDays size={14} /> Data da sessão {activeServiceSession + 1}</span>
                 <Input type="date" value={form.sessionDates[activeServiceSession] ?? form.scheduledDate} onChange={(event) => {
+                  if (activeServiceSession === 0) {
+                    const scheduledDate = event.target.value;
+                    setForm({
+                      ...form,
+                      scheduledDate,
+                      sessionDates: sessionDatesFor(form.planType, scheduledDate),
+                    });
+                    return;
+                  }
                   const sessionDates = [...form.sessionDates];
                   sessionDates[activeServiceSession] = event.target.value;
-                  setForm({
-                    ...form,
-                    sessionDates,
-                    scheduledDate: activeServiceSession === 0 ? event.target.value : form.scheduledDate,
-                  });
+                  setForm({ ...form, sessionDates });
                 }} className="h-11 bg-white" />
-                <small className="mt-1.5 block text-xs text-[#85768f]">Você pode escolher um dia diferente para cada banho.</small>
+                <small className="mt-1.5 block text-xs text-[#85768f]">
+                  {activeServiceSession === 0
+                    ? 'Ao mudar a primeira sessão, as próximas são recalculadas no mesmo dia da semana.'
+                    : 'Você pode escolher um dia diferente somente para este banho.'}
+                </small>
               </label>
               <label className="mb-3 flex cursor-pointer items-start gap-3 rounded-xl border border-[#e4dced] bg-[#faf7fc] p-3">
                 <Checkbox
