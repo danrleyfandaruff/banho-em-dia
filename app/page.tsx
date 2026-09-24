@@ -242,6 +242,7 @@ export default function Home() {
   const [todayOpen, setTodayOpen] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [paymentTarget, setPaymentTarget] = useState<Appointment | null>(null);
+  const [batchPaymentTargets, setBatchPaymentTargets] = useState<Appointment[]>([]);
   const [paymentChoice, setPaymentChoice] = useState<PaymentMethod>('');
   const [paymentAmount, setPaymentAmount] = useState('');
   const paymentLock = useRef(false);
@@ -354,7 +355,7 @@ export default function Home() {
       const response = await fetch('/api/appointments', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
       });
-      const data = await response.json().catch(() => ({ error: 'unexpected_response' })) as { appointments?: Appointment[]; rates?: CardRates; error?: string; blockers?: string[]; pendingCount?: number };
+      const data = await response.json().catch(() => ({ error: 'unexpected_response' })) as { appointments?: Appointment[]; rates?: CardRates; error?: string; blockers?: string[]; missing?: string[]; pendingCount?: number };
       if (!response.ok) {
         if (data.rates) setRates(data.rates);
         const blockerMessage = response.status === 401
@@ -369,6 +370,9 @@ export default function Home() {
             ? `Ainda ${data.pendingCount === 1 ? 'existe 1 banho em aberto' : `existem ${data.pendingCount} banhos em aberto`}. Finalize todas as sessões antes de renovar.`
             : data.error === 'rates_changed' ? 'As taxas foram atualizadas. Confira o novo total e confirme novamente.'
             : data.error === 'card_amount_required' ? 'Informe o valor do banho ou plano para calcular a taxa do cartão.'
+            : data.error === 'batch_amount_required' ? `Cadastre o valor antes de receber junto: ${(data.missing ?? []).join(', ')}.`
+            : data.error === 'batch_already_paid' ? 'Um dos planos selecionados já foi pago. Atualize a agenda e tente novamente.'
+            : data.error === 'invalid_batch_selection' ? 'Selecione pelo menos dois planos ainda não pagos.'
             : data.error === 'invalid_amount' ? 'Informe um valor válido.'
             : 'Não foi possível salvar. Tente novamente.';
         setNotice(blockerMessage);
@@ -402,6 +406,9 @@ export default function Home() {
     const open = items.filter((item) => item.status === 'scheduled');
     if (!open.length) return null;
     const selected = open.filter((item) => selectedIds.includes(item.id));
+    const selectedPlans = Array.from(new Map(
+      selected.filter((item) => item.planType !== 'single' && !item.paid).map((item) => [item.groupId, item]),
+    ).values());
     const complete = (ids: string[]) => mutate({ action: 'complete_day', scheduledDate: date, ids }, `${ids.length} ${ids.length === 1 ? 'banho concluído' : 'banhos concluídos'}`);
     return <div className="flex flex-wrap items-center gap-3 border-b border-[#e4dced] bg-[#f3edf9] px-3.5 py-3 sm:px-5">
       <label className="flex min-h-10 cursor-pointer items-center gap-2 text-sm font-semibold text-[#624782]">
@@ -410,6 +417,7 @@ export default function Home() {
         {selected.length ? `${selected.length} selecionado(s)` : `Selecionar os ${open.length} em aberto`}
       </label>
       <div className="flex flex-wrap gap-2 sm:ml-auto">
+        {selectedPlans.length >= 2 && <Button key="payment" variant="outline" className="h-auto min-h-10 whitespace-normal border-[#7353a6] text-[#653b88]" onClick={() => openBatchPayment(selectedPlans)}><CircleDollarSign /> Receber {selectedPlans.length} planos</Button>}
         {selected.length > 0 && <Button key="selected" className="h-auto min-h-10 whitespace-normal" onClick={() => complete(selected.map((item) => item.id))}><Check /> Concluir selecionados ({selected.length})</Button>}
         <Button key="all" variant="outline" className="h-auto min-h-10 whitespace-normal" onClick={() => complete(open.map((item) => item.id))}><CheckCircle2 /> Concluir todos ({open.length})</Button>
       </div>
@@ -503,6 +511,7 @@ export default function Home() {
         item.planType === 'single' ? 'Banho marcado como pendente' : 'Plano marcado como pendente',
       );
     }
+    setBatchPaymentTargets([]);
     setPaymentTarget(item);
     setPaymentChoice('');
     const registeredAmount = item.amountCents
@@ -512,7 +521,23 @@ export default function Home() {
     setPaymentOpen(true);
   }
 
+  function openBatchPayment(items: Appointment[]) {
+    const plans = Array.from(new Map(items.map((item) => [item.groupId, item])).values());
+    const missing = plans.filter((item) => item.amountCents === null);
+    if (missing.length) {
+      setNotice(`Cadastre o valor antes de receber junto: ${missing.map((item) => item.dogName || item.ownerName || 'plano sem nome').join(', ')}.`);
+      window.setTimeout(() => setNotice(''), 5200);
+      return;
+    }
+    setBatchPaymentTargets(plans);
+    setPaymentTarget(plans[0] ?? null);
+    setPaymentChoice('');
+    setPaymentAmount(formatMoney(plans.reduce((sum, item) => sum + Number(item.amountCents), 0)) ?? '');
+    setPaymentOpen(true);
+  }
+
   function editPaymentMethod(item: Appointment) {
+    setBatchPaymentTargets([]);
     setPaymentTarget(item);
     setPaymentChoice(item.paymentMethod);
     setPaymentAmount(formatMoney(item.paymentDetails?.baseCents ?? item.amountCents) ?? '');
@@ -524,12 +549,22 @@ export default function Home() {
     if (['credit', 'debit'].includes(paymentMethod) && !paymentPreview(paymentAmount, paymentMethod, rates)) return;
     paymentLock.current = true;
     setPaymentSaving(true);
+    const isBatchPayment = batchPaymentTargets.length >= 2;
     const wasPaid = paymentTarget.paid;
     const ok = await mutate(
-      wasPaid
+      isBatchPayment
+        ? {
+          action: 'paid_multiple',
+          ids: batchPaymentTargets.map((item) => item.id),
+          paymentMethod,
+          expectedRateBps: cardRateBps(paymentMethod, rates),
+        }
+        : wasPaid
         ? { action: 'payment_method', id: paymentTarget.id, paymentMethod, amountCents: realToCents(paymentAmount), expectedRateBps: cardRateBps(paymentMethod, rates) }
         : { action: 'paid', id: paymentTarget.id, paid: true, paymentMethod, amountCents: realToCents(paymentAmount), expectedRateBps: cardRateBps(paymentMethod, rates) },
-      wasPaid
+      isBatchPayment
+        ? `Pagamento de ${batchPaymentTargets.length} planos confirmado`
+        : wasPaid
         ? 'Forma de pagamento atualizada'
         : paymentTarget.planType === 'single' ? 'Pagamento do banho confirmado' : 'Pagamento do plano confirmado',
     );
@@ -538,6 +573,8 @@ export default function Home() {
     if (ok) {
       setPaymentOpen(false);
       setPaymentTarget(null);
+      if (isBatchPayment) setSelectedIds([]);
+      setBatchPaymentTargets([]);
     }
   }
 
@@ -1255,13 +1292,18 @@ export default function Home() {
       <Dialog open={paymentOpen} onOpenChange={(open) => {
         if (paymentLock.current) return;
         setPaymentOpen(open);
-        if (!open) setPaymentTarget(null);
+        if (!open) {
+          setPaymentTarget(null);
+          setBatchPaymentTargets([]);
+        }
       }}>
         <DialogContent className="mobile-sheet border-0 bg-[#fffbff] p-4 sm:max-w-md sm:p-5">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><CircleDollarSign className="text-[#7353a6]" /> {paymentTarget?.paid ? 'Alterar forma de pagamento' : 'Confirmar pagamento'}</DialogTitle>
+            <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><CircleDollarSign className="text-[#7353a6]" /> {batchPaymentTargets.length >= 2 ? 'Receber planos juntos' : paymentTarget?.paid ? 'Alterar forma de pagamento' : 'Confirmar pagamento'}</DialogTitle>
             <DialogDescription>
-              {paymentTarget?.planType === 'single' ? 'Como este banho foi pago?' : `Como o plano de ${paymentTarget?.dogName || paymentTarget?.ownerName || 'cliente sem nome'} foi pago?`}
+              {batchPaymentTargets.length >= 2
+                ? `${batchPaymentTargets.length} planos selecionados. Escolha a forma de pagamento para calcular o valor total.`
+                : paymentTarget?.planType === 'single' ? 'Como este banho foi pago?' : `Como o plano de ${paymentTarget?.dogName || paymentTarget?.ownerName || 'cliente sem nome'} foi pago?`}
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-2 sm:grid-cols-2">
@@ -1280,13 +1322,17 @@ export default function Home() {
               </Button>
             ))}
           </div>
-          <label className="block text-sm font-semibold">Valor cadastrado do banho/plano, sem taxa
-            <Input disabled={paymentSaving} inputMode="numeric" value={paymentAmount} onChange={(event) => setPaymentAmount(maskReal(event.target.value))} placeholder="R$ 0,00" className="mt-2 h-11 bg-white" />
+          <label className="block text-sm font-semibold">{batchPaymentTargets.length >= 2 ? 'Valor somado dos planos, sem taxa' : 'Valor cadastrado do banho/plano, sem taxa'}
+            <Input disabled={paymentSaving} readOnly={batchPaymentTargets.length >= 2} inputMode="numeric" value={paymentAmount} onChange={(event) => setPaymentAmount(maskReal(event.target.value))} placeholder="R$ 0,00" className="mt-2 h-11 bg-white read-only:bg-[#f3eef7]" />
           </label>
-          <PaymentSummary amount={paymentAmount} method={paymentChoice} rates={rates} />
+          <PaymentSummary amount={paymentAmount} method={paymentChoice} rates={rates} baseLabel={batchPaymentTargets.length >= 2 ? 'Total dos planos' : 'Valor do banho/plano'} />
           <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5">
-            <Button type="button" variant="outline" disabled={paymentSaving} onClick={() => setPaymentOpen(false)}>Cancelar</Button>
-            <Button type="button" disabled={!paymentChoice || (['credit', 'debit'].includes(paymentChoice) && !paymentPreview(paymentAmount, paymentChoice, rates))} onClick={() => paymentChoice ? confirmPayment(paymentChoice) : undefined}><Check /> Confirmar recebimento</Button>
+            <Button type="button" variant="outline" disabled={paymentSaving} onClick={() => {
+              setPaymentOpen(false);
+              setPaymentTarget(null);
+              setBatchPaymentTargets([]);
+            }}>Cancelar</Button>
+            <Button type="button" disabled={!paymentChoice || (['credit', 'debit'].includes(paymentChoice) && !paymentPreview(paymentAmount, paymentChoice, rates))} onClick={() => paymentChoice ? confirmPayment(paymentChoice) : undefined}><Check /> {batchPaymentTargets.length >= 2 ? `Confirmar ${batchPaymentTargets.length} planos` : 'Confirmar recebimento'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

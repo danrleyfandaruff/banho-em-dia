@@ -343,6 +343,77 @@ export async function POST(request: Request) {
     }
   }
 
+  if (action === 'paid_multiple') {
+    const ids = Array.isArray(body.ids)
+      ? [...new Set(body.ids.filter((id): id is string => typeof id === 'string'))]
+      : [];
+    const paymentMethod = String(body.paymentMethod ?? '');
+    if (ids.length < 2 || !['pix', 'cash', 'debit', 'credit'].includes(paymentMethod)) {
+      return Response.json({ error: 'invalid_batch_selection' }, { status: 400 });
+    }
+
+    const selectedRows = await db.prepare(
+      'SELECT * FROM appointments WHERE id IN (SELECT value FROM json_each(?))',
+    ).bind(JSON.stringify(ids)).all<AppointmentRow>();
+    const plans = Array.from(
+      new Map(selectedRows.results.map((row) => [row.group_id, row])).values(),
+    );
+    if (plans.length < 2 || plans.some((row) => row.plan_type === 'single')) {
+      return Response.json({ error: 'invalid_batch_selection' }, { status: 400 });
+    }
+    if (plans.some((row) => Boolean(row.paid))) {
+      return Response.json({ error: 'batch_already_paid' }, { status: 409 });
+    }
+    if (plans.some((row) => row.amount_cents === null)) {
+      return Response.json({
+        error: 'batch_amount_required',
+        missing: plans.filter((row) => row.amount_cents === null).map(appointmentName),
+      }, { status: 400 });
+    }
+
+    const rates = await getCardRates();
+    if (['credit', 'debit'].includes(paymentMethod)
+      && body.expectedRateBps !== undefined
+      && body.expectedRateBps !== cardRateBps(paymentMethod, rates)) {
+      return Response.json({ error: 'rates_changed', rates }, { status: 409 });
+    }
+
+    const baseTotalCents = plans.reduce((sum, row) => sum + Number(row.amount_cents), 0);
+    let combinedPayment: PaymentBreakdown | null;
+    try { combinedPayment = calculatePayment(baseTotalCents, paymentMethod, rates); }
+    catch { return Response.json({ error: 'invalid_amount' }, { status: 400 }); }
+    if (!combinedPayment) return Response.json({ error: 'invalid_amount' }, { status: 400 });
+
+    let allocatedTotalCents = 0;
+    const statements = plans.map((row, index) => {
+      const baseCents = Number(row.amount_cents);
+      const totalCents = index === plans.length - 1
+        ? combinedPayment.totalCents - allocatedTotalCents
+        : baseTotalCents === 0 ? 0 : Math.floor(combinedPayment.totalCents * baseCents / baseTotalCents);
+      allocatedTotalCents += totalCents;
+      const paymentDetails: PaymentBreakdown = {
+        baseCents,
+        rateBps: combinedPayment.rateBps,
+        surchargeCents: totalCents - baseCents,
+        totalCents,
+      };
+      return db.prepare(
+        'UPDATE appointments SET paid = 1, payment_method = ?, payment_details = ?, amount_cents = ? WHERE group_id = ?',
+      ).bind(paymentMethod, JSON.stringify(paymentDetails), totalCents, row.group_id);
+    });
+    await db.batch(statements);
+    await writeAudit(
+      auth.user, 'payments_updated', 'appointment_groups', crypto.randomUUID(),
+      `Confirmou o pagamento conjunto de ${plans.length} planos · total ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(combinedPayment.totalCents / 100)}${combinedPayment.rateBps ? ` (Stone ${combinedPayment.rateBps / 100}%)` : ''}`,
+      {
+        groupIds: plans.map((row) => row.group_id),
+        customers: plans.map(appointmentName),
+        paymentMethod,
+        paymentDetails: combinedPayment,
+      },
+    );
+  }
+
   if (action === 'move') {
     const target = await db.prepare('SELECT * FROM appointments WHERE id = ?')
       .bind(String(body.id ?? ''))
