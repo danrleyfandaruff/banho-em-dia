@@ -343,10 +343,16 @@ export default function Home() {
       const response = await fetch('/api/appointments', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
       });
-      const data = await response.json() as { appointments?: Appointment[]; rates?: CardRates; error?: string; blockers?: string[]; pendingCount?: number };
+      const data = await response.json().catch(() => ({ error: 'unexpected_response' })) as { appointments?: Appointment[]; rates?: CardRates; error?: string; blockers?: string[]; pendingCount?: number };
       if (!response.ok) {
         if (data.rates) setRates(data.rates);
-        const blockerMessage = Array.isArray(data.blockers)
+        const blockerMessage = response.status === 401
+          ? 'Seu acesso expirou. Atualize a página e tente salvar novamente.'
+          : response.status === 403
+            ? 'Este usuário não tem permissão para salvar. Entre novamente ou fale com o administrador.'
+          : response.status >= 500
+            ? 'O sistema ficou indisponível por alguns instantes. Seus dados continuam na tela; tente salvar novamente.'
+          : Array.isArray(data.blockers)
           ? `Não é possível apagar: ${data.blockers.join(' e ')}.`
           : data.error === 'plan_incomplete'
             ? `Ainda ${data.pendingCount === 1 ? 'existe 1 banho em aberto' : `existem ${data.pendingCount} banhos em aberto`}. Finalize todas as sessões antes de renovar.`
@@ -366,7 +372,10 @@ export default function Home() {
       }
       return true;
     } catch {
-      setNotice('Não foi possível salvar. Tente novamente.');
+      setNotice(navigator.onLine
+        ? 'A conexão com o sistema falhou. Seus dados continuam na tela; tente salvar novamente.'
+        : 'Sem internet. Seus dados continuam na tela; conecte-se e tente salvar novamente.');
+      window.setTimeout(() => setNotice(''), 5200);
       return false;
     }
   }

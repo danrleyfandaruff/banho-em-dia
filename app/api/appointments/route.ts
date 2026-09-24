@@ -195,7 +195,9 @@ export async function POST(request: Request) {
     const cpf = String(body.cpf ?? '');
     const paymentMethod = body.paid ? String(body.paymentMethod ?? '') : '';
     const rates = await getCardRates();
-    if (body.paid && ['credit', 'debit'].includes(paymentMethod) && body.expectedRateBps !== cardRateBps(paymentMethod, rates)) {
+    if (body.paid && ['credit', 'debit'].includes(paymentMethod)
+      && body.expectedRateBps !== undefined
+      && body.expectedRateBps !== cardRateBps(paymentMethod, rates)) {
       return Response.json({ error: 'rates_changed', rates }, { status: 409 });
     }
     if (body.paid && ['credit', 'debit'].includes(paymentMethod) && amountCents === null) {
@@ -292,7 +294,9 @@ export async function POST(request: Request) {
       const paymentMethod = paid ? String(body.paymentMethod ?? row.payment_method ?? '') : '';
       const previousPaymentDetails = parsePaymentDetails(row.payment_details);
       const rates = await getCardRates();
-      if (paid && ['credit', 'debit'].includes(paymentMethod) && body.expectedRateBps !== cardRateBps(paymentMethod, rates)) {
+      if (paid && ['credit', 'debit'].includes(paymentMethod)
+        && body.expectedRateBps !== undefined
+        && body.expectedRateBps !== cardRateBps(paymentMethod, rates)) {
         return Response.json({ error: 'rates_changed', rates }, { status: 409 });
       }
       if (paid && !['pix', 'cash', 'debit', 'credit'].includes(paymentMethod)) {
