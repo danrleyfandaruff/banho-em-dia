@@ -4,7 +4,7 @@ import { ComponentProps, DragEvent, FormEvent, useEffect, useMemo, useRef, useSt
 import {
   Activity, Calculator, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight,
   CircleDollarSign, Clock3, CreditCard, Dog, GripVertical, History, IdCard, ListChecks, LoaderCircle, LogOut,
-  MessageCircle, PawPrint, Pencil, Plus, RefreshCw, Scissors, Search, Send, ShieldCheck,
+  MessageCircle, MoreHorizontal, PawPrint, Pencil, Plus, RefreshCw, Scissors, Search, Send, ShieldCheck,
   Sparkles, Trash2, UserPlus, UserRound, Users, X,
 } from 'lucide-react';
 import { Button as BaseButton } from '@/components/ui/button';
@@ -17,14 +17,14 @@ import {
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
+import type { Appointment, PetProfile, PlanType, Status, PaymentMethod } from '@/lib/agenda-types';
+import { AgendaWorkspace } from '@/components/agenda-workspace';
+import { PlanSessionDates } from '@/components/plan-session-dates';
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { PwaInstallButton } from '@/components/pwa-install-button';
-import { calculatePayment, cardRateBps, defaultCardRates, type CardRates, type PaymentBreakdown } from '@/lib/payment';
-
-type PlanType = 'monthly' | 'fortnightly' | 'single';
-type Status = 'scheduled' | 'completed' | 'absent';
-type PaymentMethod = '' | 'pix' | 'cash' | 'debit' | 'credit';
+import { calculatePayment, cardRateBps, defaultCardRates, type CardRates } from '@/lib/payment';
 
 // Keep feedback on the button that started the action, including queued saves.
 function Button({ onClick, children, disabled, className, ...props }: ComponentProps<typeof BaseButton>) {
@@ -47,28 +47,6 @@ function Button({ onClick, children, disabled, className, ...props }: ComponentP
 const cardColors: Record<Status, string> = {
   scheduled: 'appointment-open', completed: 'appointment-completed', absent: 'appointment-absent',
 };
-type Appointment = {
-  id: string;
-  groupId: string;
-  clientId: string | null;
-  petId: string | null;
-  customerPetName: string;
-  ownerName: string;
-  dogName: string;
-  whatsapp: string;
-  cpf: string;
-  paymentMethod: PaymentMethod;
-  paymentDetails: PaymentBreakdown | null;
-  planType: PlanType;
-  amountCents: number | null;
-  paid: boolean;
-  scheduledDate: string;
-  scheduledTime: string;
-  status: Status;
-  services: string[];
-  sessionNumber: number;
-  totalSessions: number;
-};
 type CurrentUser = { id: string; name: string; email: string; role: 'admin' | 'staff' };
 type TeamUser = CurrentUser & { active: boolean; createdAt: string; lastLoginAt: string | null };
 type AuditLog = {
@@ -81,20 +59,6 @@ type AuditLog = {
   description: string;
   createdAt: string;
 };
-type PetProfile = {
-  key: string;
-  clientId: string | null;
-  petId: string | null;
-  ownerName: string;
-  dogName: string;
-  whatsapp: string;
-  cpf: string;
-  favoriteServices: string[];
-  lastTime: string;
-  lastAmountCents: number | null;
-  notes: string;
-};
-
 const serviceOptions = [
   'Banho',
   'Banho medicamentoso',
@@ -149,23 +113,6 @@ function sessionDatesFor(planType: PlanType, startDate: string) {
     { length: totalSessionsFor(planType) },
     (_, index) => addDays(startDate, intervalDaysFor(planType) * index),
   );
-}
-
-function addMonths(monthString: string, amount: number) {
-  const [year, month] = monthString.split('-').map(Number);
-  const date = new Date(year, month - 1 + amount, 1, 12);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-}
-
-function daysInMonth(monthString: string) {
-  const [year, month] = monthString.split('-').map(Number);
-  const total = new Date(year, month, 0).getDate();
-  return Array.from({ length: total }, (_, index) => `${monthString}-${String(index + 1).padStart(2, '0')}`);
-}
-
-function prettyMonth(monthString: string) {
-  return new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric' })
-    .format(new Date(`${monthString}-01T12:00:00`));
 }
 
 function prettyDate(dateString: string) {
@@ -256,7 +203,6 @@ export default function Home() {
   const [loginSaving, setLoginSaving] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [loading, setLoading] = useState(true);
-  const [agendaSearch, setAgendaSearch] = useState('');
   const [petSearch, setPetSearch] = useState('');
   const [petSearchFocused, setPetSearchFocused] = useState(false);
   const [duplicateOpen, setDuplicateOpen] = useState(false);
@@ -306,7 +252,6 @@ export default function Home() {
   const [renewTarget, setRenewTarget] = useState<Appointment | null>(null);
   const [renewDates, setRenewDates] = useState<string[]>([]);
   const [renewedWarning, setRenewedWarning] = useState<{ name: string; renewedAt: string | null } | null>(null);
-  const [selectedMonth, setSelectedMonth] = useState(() => localDateString().slice(0, 7));
   const [notice, setNotice] = useState('');
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -347,7 +292,6 @@ export default function Home() {
     load();
   }, []);
 
-  const days = useMemo(() => daysInMonth(selectedMonth), [selectedMonth]);
   const groupStats = useMemo(() => {
     const stats = new Map<string, { completed: number; absent: number; scheduled: number }>();
     appointments.forEach((item) => {
@@ -399,20 +343,6 @@ export default function Home() {
       return text.includes(query) || Boolean(digits && `${pet.whatsapp}${pet.cpf}`.replace(/\D/g, '').includes(digits));
     }).slice(0, 8);
   }, [petProfiles, petSearch]);
-
-  const visibleAppointments = useMemo(() => {
-    const query = normalizeSearch(agendaSearch);
-    if (!query) return appointments;
-    const digits = agendaSearch.replace(/\D/g, '');
-    return appointments.filter((item) => {
-      const text = normalizeSearch(`${item.dogName} ${item.ownerName} ${item.whatsapp} ${item.cpf} ${item.services.join(' ')}`);
-      return text.includes(query) || Boolean(digits && `${item.whatsapp}${item.cpf}`.replace(/\D/g, '').includes(digits));
-    });
-  }, [appointments, agendaSearch]);
-
-  const visibleDays = agendaSearch
-    ? [...new Set(visibleAppointments.map((item) => item.scheduledDate))].sort()
-    : days;
 
   const duplicateAppointments = useMemo(() => {
     const dates = new Set(form.sessionDates.slice(0, totalSessionsFor(form.planType)));
@@ -533,6 +463,71 @@ export default function Home() {
       window.setTimeout(() => setNotice(''), 5200);
       return false;
     }
+  }
+
+  const planSessions = useMemo(() => {
+    const groups = new Map<string, Appointment[]>();
+    for (const item of appointments) {
+      const group = groups.get(item.groupId) ?? [];
+      group.push(item);
+      groups.set(item.groupId, group);
+    }
+    for (const group of groups.values()) group.sort((a, b) => a.scheduledDate.localeCompare(b.scheduledDate) || a.scheduledTime.localeCompare(b.scheduledTime));
+    return groups;
+  }, [appointments]);
+
+  function scheduleProfile(profile: PetProfile) {
+    const fresh = emptyForm(today);
+    setForm({ ...fresh, clientId: profile.clientId, petId: profile.petId,
+      ownerName: profile.ownerName, dogName: profile.dogName, whatsapp: profile.whatsapp, cpf: profile.cpf,
+      scheduledTime: profile.lastTime || fresh.scheduledTime,
+      amount: formatMoney(profile.lastAmountCents) ?? '',
+      sessionServices: fresh.sessionServices.map(() => profile.favoriteServices.length ? [...profile.favoriteServices] : ['Banho']),
+    });
+    setPetSearch(`${profile.dogName || 'Pet sem nome'} · ${profile.ownerName}`);
+    setActiveServiceSession(0);
+    setNewOpen(true);
+  }
+
+  function renderCompactAppointment(item: Appointment, fromOverview = false) {
+    const stats = groupStats.get(item.groupId);
+    const renewable = item.planType !== 'single' && item.sessionNumber === item.totalSessions && item.status === 'completed' && stats?.scheduled === 0;
+    const notes = profileForAppointment(item)?.notes;
+    const showPlan = () => fromOverview ? openPlanFromToday(item) : openPlan(item);
+    const showHistory = () => { if (fromOverview) setTodayOpen(false); openPetHistory(item); };
+    return <div key={item.id} data-appointment-card className={`appointment-card relative grid gap-3 px-4 py-3 sm:grid-cols-[64px_minmax(0,1fr)] sm:pl-10 xl:grid-cols-[64px_minmax(0,1fr)_auto] ${cardColors[item.status]} ${selectedIds.includes(item.id) && item.status === 'scheduled' ? 'appointment-selected' : ''} ${draggingId === item.id ? 'opacity-45' : ''}`}>
+      <button type="button" draggable onDragStart={(event) => startDragging(event, item)} onDragEnd={() => { setDraggingId(null); setDropTarget(null); }} aria-label={`Arrastar ${item.dogName || 'agendamento'} para outro dia`} title="Arraste para outro dia" className="absolute top-1/2 left-1 hidden h-10 w-7 -translate-y-1/2 cursor-grab items-center justify-center rounded text-[#82758d] hover:bg-[#f0ecf5] sm:flex"><GripVertical size={18} /></button>
+      <div className="flex items-center gap-3 text-sm font-bold text-[#51435d] sm:flex-col sm:items-start sm:gap-2">{selectionCheckbox(item)}<time dateTime={`${item.scheduledDate}T${item.scheduledTime}`}>{item.scheduledTime}</time></div>
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1"><button type="button" onClick={showHistory} className="break-words text-left font-extrabold text-[#302638] hover:text-[#7353a6] hover:underline">{item.dogName || 'Pet sem nome'}</button><span className="break-words text-sm text-[#6c6374]">{item.ownerName || 'Tutor não informado'}</span></div>
+        <p className="mt-1 break-words text-sm text-[#62586d]">{item.services.length ? item.services.join(' · ') : 'Sem serviços definidos'}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className={`appointment-status ${cardColors[item.status]}`}>{item.status === 'completed' ? <CheckCircle2 size={13} /> : item.status === 'absent' ? <X size={13} /> : <Clock3 size={13} />}{statusLabels[item.status]}</span>
+          <Button variant="ghost" size="sm" onClick={() => updatePaid(item)} title={item.planType === 'single' ? 'Pagamento deste banho' : 'Pagamento único de todo o plano'} className={`h-8 px-1 text-xs ${item.paid ? 'text-[#347052]' : 'text-[#a0472e]'}`}><CircleDollarSign size={14} />{item.planType === 'single' ? (item.paid ? 'Pago' : 'Pendente') : (item.paid ? 'Plano pago' : 'Plano pendente')}</Button>
+        </div>
+        {item.planType !== 'single' && <PlanSessionDates sessions={planSessions.get(item.groupId) ?? []} currentId={item.id} onOpen={showPlan} />}
+        {notes && <p className="mt-2 line-clamp-2 text-xs text-[#80591d]" title={notes}>Obs.: {notes}</p>}
+      </div>
+      <div className="flex items-center justify-end gap-2 sm:col-start-2 xl:col-start-auto xl:self-center">
+        {renewable ? <Button size="sm" onClick={() => openRenew(item)}><RefreshCw />Renovar</Button> : item.status === 'scheduled' ? <Button size="sm" onClick={() => mutate({ action: 'status', id: item.id, status: 'completed' }, 'Atendimento concluído')}><Check />Concluir</Button> : null}
+        <DropdownMenu>
+          <DropdownMenuTrigger render={<BaseButton variant="outline" size="sm" />} aria-label={`Mais ações para ${item.dogName || 'atendimento'}`}><MoreHorizontal /><span>Mais ações</span></DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-56 [&_[data-slot=dropdown-menu-item]]:min-h-10 [&_[data-slot=dropdown-menu-item]]:px-3">
+            <DropdownMenuItem onClick={() => fromOverview ? editFromOverview(item) : openEdit(item)}><Pencil />Editar atendimento</DropdownMenuItem>
+            <DropdownMenuItem onClick={showHistory}><History />Ficha e histórico</DropdownMenuItem>
+            {item.planType !== 'single' && <DropdownMenuItem onClick={showPlan}><ListChecks />Ver plano</DropdownMenuItem>}
+            {item.whatsapp && <DropdownMenuItem onClick={() => openWhatsapp(item)}><MessageCircle />WhatsApp</DropdownMenuItem>}
+            <DropdownMenuItem onClick={() => editPaymentMethod(item)}><CreditCard />Forma de pagamento</DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, -1) }, 'Movido para o dia anterior')}><ChevronLeft />Mover para o dia anterior</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, 1) }, 'Movido para o próximo dia')}><ChevronRight />Mover para o próximo dia</DropdownMenuItem>
+            {item.status === 'scheduled' ? <DropdownMenuItem onClick={() => mutate({ action: 'status', id: item.id, status: 'absent' }, 'Falta registrada')}><X />Registrar falta</DropdownMenuItem> : <DropdownMenuItem onClick={() => mutate({ action: 'status', id: item.id, status: 'scheduled' }, 'Atendimento reaberto')}><RefreshCw />Reabrir atendimento</DropdownMenuItem>}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onClick={() => { if (fromOverview) setTodayOpen(false); openDelete(item); }}><Trash2 />{item.planType === 'single' ? 'Apagar banho' : 'Apagar plano'}</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </div>;
   }
 
   function selectionCheckbox(item: Appointment) {
@@ -1180,13 +1175,13 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-[#f7f3fb] text-[#302638]">
-      <header className="sticky top-0 z-20 border-b border-[#e4dced] bg-[#fffbff]/95 backdrop-blur">
+    <main className="min-h-screen bg-[#f7f7f9] text-[#302638]">
+      <header className="border-b border-[#e4dced] bg-[#fffbff]/95 backdrop-blur">
         <div className="mx-auto flex min-h-16 max-w-[1440px] flex-wrap items-center justify-between gap-2 px-3 py-2.5 sm:min-h-20 sm:px-6 lg:px-9">
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#7353a6] text-white shadow-sm sm:h-10 sm:w-10"><PawPrint size={20} strokeWidth={2.2} /></span>
             <div className="min-w-0">
-              <p className="hidden text-[10px] font-bold uppercase tracking-[0.16em] text-[#85768f] sm:block">Pet shop</p>
+              <p className="hidden text-xs font-bold uppercase tracking-[0.16em] text-[#85768f] sm:block">Pet shop</p>
               <h1 className="truncate font-heading text-base font-extrabold tracking-[-0.03em] sm:text-xl"><span className="sm:hidden">HEIN PET</span><span className="hidden sm:inline">HEIN PET SALON</span></h1>
             </div>
           </div>
@@ -1202,7 +1197,7 @@ export default function Home() {
             )}
             <div className="hidden text-right md:block">
               <p className="max-w-36 truncate text-xs font-extrabold">{currentUser?.name}</p>
-              <p className="text-[10px] font-semibold text-[#8b7c95]">{currentUser?.role === 'admin' ? 'Administrador' : 'Equipe'}</p>
+              <p className="text-xs font-semibold text-[#8b7c95]">{currentUser?.role === 'admin' ? 'Administrador' : 'Equipe'}</p>
             </div>
             <button type="button" onClick={logout} aria-label="Sair" title="Sair" className="grid h-8 w-8 place-items-center rounded-lg text-[#7f7189] transition hover:bg-[#eee7f5] sm:h-9 sm:w-9"><LogOut size={17} /></button>
             <Button onClick={() => openNew()} className="h-10 rounded-xl bg-[#9b6bc2] px-2.5 font-bold text-white shadow-[0_5px_16px_rgba(115,83,166,0.24)] hover:bg-[#8254a8] sm:h-11 sm:px-4">
@@ -1219,206 +1214,20 @@ export default function Home() {
       )}
 
       <div className="mx-auto grid max-w-[1440px] gap-5 px-3 py-5 sm:gap-7 sm:px-6 sm:py-7 lg:grid-cols-[minmax(0,1fr)_300px] lg:px-9">
-        <section className="min-w-0">
-          <div className="mb-5 flex flex-wrap items-end justify-between gap-3 sm:mb-6 sm:gap-4">
-            <div>
-              <p className="mb-1 text-sm font-semibold text-[#86778f]">{agendaSearch ? 'Pesquisa em toda a agenda' : 'Agenda mensal'}</p>
-              <h2 className="font-heading text-[30px] font-extrabold capitalize tracking-[-0.045em] sm:text-[34px]">{agendaSearch ? `${visibleAppointments.length} ${visibleAppointments.length === 1 ? 'atendimento' : 'atendimentos'}` : prettyMonth(selectedMonth)}</h2>
-              <p className="mt-1 hidden text-xs font-semibold text-[#92849c] sm:block">Arraste pelo ícone <GripVertical className="inline" size={14} /> para trocar o dia</p>
-            </div>
-            <div className="flex w-full items-center justify-between gap-1.5 rounded-xl border border-[#e4dced] bg-white p-1 shadow-sm sm:w-auto">
-              <Button variant="ghost" size="icon-sm" onClick={() => setSelectedMonth((month) => addMonths(month, -1))} aria-label="Mês anterior" title="Mês anterior"><ChevronLeft /></Button>
-              <button type="button" onClick={() => setSelectedMonth(today.slice(0, 7))} className="inline-flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-extrabold capitalize text-[#62556c] transition hover:bg-[#f1ecf7] sm:min-w-36 sm:flex-none"><CalendarDays size={15} /> {selectedMonth === today.slice(0, 7) ? 'Este mês' : 'Voltar para hoje'}</button>
-              <Button variant="ghost" size="icon-sm" onClick={() => setSelectedMonth((month) => addMonths(month, 1))} aria-label="Próximo mês" title="Próximo mês"><ChevronRight /></Button>
-            </div>
-          </div>
-
-          <div className="relative mb-5 sm:mb-6">
-            <Search className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-[#8d7e97]" size={18} />
-            <Input
-              type="search"
-              value={agendaSearch}
-              onChange={(event) => setAgendaSearch(event.target.value)}
-              placeholder="Buscar pet, dono, WhatsApp, CPF ou serviço"
-              className="h-12 rounded-xl border-[#ddd2e7] bg-white pr-24 pl-11 shadow-sm"
-            />
-            {agendaSearch && <button type="button" onClick={() => setAgendaSearch('')} className="absolute top-1/2 right-3 -translate-y-1/2 rounded-lg px-2 py-1 text-xs font-bold text-[#7353a6] hover:bg-[#f1ecf7]">Limpar</button>}
-          </div>
-
-          <Button
-            type="button"
-            onClick={() => { changeDailyAgendaDate(today); setTodayOpen(true); }}
-            className="mb-5 h-auto w-full justify-between gap-2 rounded-2xl border border-[#cdbce0] bg-[#7353a6] p-3 text-left text-white shadow-[0_10px_28px_rgba(115,83,166,0.22)] hover:bg-[#684999] sm:mb-6 sm:gap-4 sm:p-5"
-          >
-            <span className="flex min-w-0 items-center gap-3 sm:gap-4">
-              <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-white/15 font-heading text-xl font-extrabold sm:h-16 sm:w-16 sm:rounded-2xl sm:text-3xl">{Number(today.slice(-2))}</span>
-              <span className="min-w-0">
-                <span className="block text-xs font-extrabold uppercase tracking-[0.14em] text-[#e8dcf3]">Agenda de hoje</span>
-                <span className="mt-1 block truncate font-heading text-lg font-extrabold capitalize sm:text-xl">{prettyDate(today)}</span>
-                <span className="mt-1 hidden text-xs font-semibold text-[#eadff4] sm:block">Toque para ver e atualizar os atendimentos</span>
-              </span>
-            </span>
-            <span className="flex shrink-0 items-center gap-2 sm:gap-4">
-              <span className="text-center"><strong className="block font-heading text-2xl font-extrabold">{todayAppointments.length}</strong><small className="text-[10px] font-bold text-[#e8dcf3]">total</small></span>
-              <span className="hidden text-center sm:block"><strong className="block font-heading text-2xl font-extrabold">{todayAppointments.filter((item) => item.status === 'scheduled').length}</strong><small className="text-[10px] font-bold text-[#e8dcf3]">em aberto</small></span>
-              <span className="hidden text-center sm:block"><strong className="block font-heading text-2xl font-extrabold">{todayAppointments.filter((item) => item.status === 'completed').length}</strong><small className="text-[10px] font-bold text-[#e8dcf3]">concluídos</small></span>
-              <ChevronRight className="ml-0 sm:ml-1" size={20} />
-            </span>
-          </Button>
-
-          {loading ? (
-            <div className="rounded-2xl border border-[#e4dced] bg-[#fffbff] p-12 text-center text-sm font-semibold text-[#81748a]"><LoaderCircle className="mx-auto mb-2 animate-spin text-[#7353a6]" /> Carregando agenda...</div>
-          ) : (
-            <div className="space-y-4">
-              {agendaSearch && visibleDays.length === 0 && (
-                <div className="rounded-2xl border border-dashed border-[#cdbce0] bg-[#fffbff] p-8 text-center">
-                  <Search className="mx-auto text-[#9b6bc2]" />
-                  <p className="mt-2 font-heading font-extrabold">Nenhum atendimento encontrado</p>
-                  <p className="mt-1 text-xs text-[#81748a]">Tente buscar por outro nome, telefone, CPF ou serviço.</p>
-                </div>
-              )}
-              {visibleDays.map((date) => {
-                const dayAppointments = visibleAppointments.filter((item) => item.scheduledDate === date);
-                return (
-                  <article
-                    key={date}
-                    onDragOver={(event) => {
-                      if (!draggingId) return;
-                      event.preventDefault();
-                      event.dataTransfer.dropEffect = 'move';
-                      setDropTarget(date);
-                    }}
-                    onDrop={(event) => dropOnDay(event, date)}
-                    className={`overflow-hidden rounded-2xl border bg-[#fffbff] shadow-[0_2px_10px_rgba(91,67,116,0.06)] transition-all ${
-                      draggingId && dropTarget === date
-                        ? 'border-[#8c6fba] bg-[#f2ecfa] ring-2 ring-[#8c6fba]/25'
-                        : 'border-[#e4dced]'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-3 border-b border-[#ede6f2] px-3.5 py-3 sm:items-center sm:px-5 sm:py-3.5">
-                      <div className="min-w-0 sm:flex sm:flex-wrap sm:items-baseline sm:gap-2.5">
-                        <h3 className={`font-heading text-lg font-extrabold ${date === today ? 'text-[#7353a6]' : ''}`}>{date === today ? 'Hoje' : date === addDays(today, 1) ? 'Amanhã' : prettyDate(date).split(',')[0]}</h3>
-                        <span className="block truncate text-xs font-medium capitalize text-[#81748a] sm:inline sm:text-sm">{prettyDate(date)}</span>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <span className="rounded-full bg-[#f1edf5] px-2.5 py-1 text-xs font-bold text-[#776a80]">{dayAppointments.length} {dayAppointments.length === 1 ? 'dog' : 'dogs'}</span>
-                        <button type="button" onClick={() => openNew(date)} className="inline-flex h-8 items-center gap-1 rounded-lg bg-[#eee6f7] px-2.5 text-xs font-extrabold text-[#7353a6] transition hover:bg-[#e3d7ef]" aria-label={`Agendar em ${prettyDate(date)}`}><Plus size={14} /> Agendar</button>
-                      </div>
-                    </div>
-
-                    {dayActions(date, dayAppointments)}
-                    {dayAppointments.length ? (
-                      <div className="divide-y divide-[#eee8f3]">
-                        {dayAppointments.map((item) => {
-                          const stats = groupStats.get(item.groupId) ?? { completed: 0, absent: 0, scheduled: 0 };
-                          const isRenewable = item.planType !== 'single'
-                            && item.sessionNumber === item.totalSessions
-                            && item.status === 'completed'
-                            && stats.scheduled === 0;
-                          return (
-                            <div
-                              key={item.id}
-                              data-appointment-card
-                              className={`appointment-card relative grid gap-3 px-3.5 py-4 transition sm:grid-cols-[62px_minmax(0,1fr)_auto] sm:items-center sm:gap-4 sm:pr-5 sm:pl-11 ${cardColors[item.status]} ${selectedIds.includes(item.id) && item.status === 'scheduled' ? 'appointment-selected' : ''} ${draggingId === item.id ? 'opacity-45' : ''}`}
-                            >
-                              <button
-                                type="button"
-                                draggable
-
-                                onDragStart={(event) => startDragging(event, item)}
-                                onDragEnd={() => { setDraggingId(null); setDropTarget(null); }}
-                                aria-label={`Arrastar ${item.dogName || item.ownerName || 'agendamento'} para outro dia`}
-                                title="Arraste para outro dia"
-                                className="absolute left-1.5 top-1/2 hidden h-10 w-7 -translate-y-1/2 cursor-grab place-items-center rounded-lg text-[#9b8ca5] transition hover:bg-[#eee7f5] hover:text-[#7353a6] active:cursor-grabbing sm:grid"
-                              >
-                                <GripVertical size={18} />
-                              </button>
-                              <div className="flex items-center gap-3 font-heading text-sm font-extrabold text-[#6a5c74] sm:flex-col sm:items-start">
-                                {selectionCheckbox(item)}
-                                <Clock3 className="sm:hidden" size={15} /> {item.scheduledTime}
-                              </div>
-                              <div>
-                                <div className="mb-1.5 flex flex-wrap items-center gap-2">
-                                  <div className="mr-1">
-                                    <button onClick={() => openEdit(item)} className="group/name flex items-center gap-1.5 text-left">
-                                      <h4 className="font-heading text-base font-extrabold tracking-[-0.02em]">{item.dogName || 'Cachorro sem nome'}</h4>
-                                      <Pencil size={13} className="text-[#9b8ca5] sm:opacity-0 sm:transition sm:group-hover/name:opacity-100" />
-                                    </button>
-                                    {item.ownerName && <p className="text-[11px] font-semibold text-[#92849c]">Dono: {item.ownerName}</p>}
-                                    {item.cpf && <p className="text-[10px] font-semibold text-[#9b8ca5]">CPF: {item.cpf}</p>}
-                                  </div>
-                                  {item.whatsapp && (
-                                    <button
-                                      type="button"
-                                      onClick={() => openWhatsapp(item)}
-                                      aria-label={`Abrir WhatsApp de ${item.ownerName || item.dogName || 'cliente'}`}
-                                      title={`WhatsApp: ${item.whatsapp}`}
-                                      className="grid h-8 w-8 place-items-center rounded-full bg-[#e6f7eb] text-[#1e8b4c] transition hover:bg-[#d5f0de]"
-                                    >
-                                      <MessageCircle size={17} />
-                                    </button>
-                                  )}
-                                  <span className="rounded-full bg-[#eee6f7] px-2 py-0.5 text-[11px] font-bold text-[#7353a6]">{planLabels[item.planType]} · {item.sessionNumber} de {item.totalSessions}</span>
-                                  <span className={`appointment-status ${cardColors[item.status]}`}>{item.status === 'completed' ? <CheckCircle2 size={14} /> : item.status === 'absent' ? <X size={14} /> : <Clock3 size={14} />}{statusLabels[item.status]}</span>
-                                  <Button variant="ghost"
-
-                                    title={item.planType === 'single' ? 'Pagamento deste banho' : 'Pagamento único para todo o plano'}
-                                    onClick={() => updatePaid(item)}
-                                    className={`inline-flex items-center gap-1 text-[11px] font-bold disabled:opacity-50 ${item.paid ? 'text-[#568066]' : 'text-[#c4563c]'}`}
-                                  >
-                                    <CircleDollarSign size={13} /> {item.planType === 'single' ? (item.paid ? 'Pago' : 'Pendente') : (item.paid ? 'Plano pago' : 'Plano pendente')}
-                                  </Button>
-                                  {formatMoney(item.amountCents) && <span className="text-[11px] font-semibold text-[#81748a]">{formatMoney(item.amountCents)}</span>}
-                                  {item.paymentMethod && <button type="button" onClick={() => editPaymentMethod(item)} title="Alterar forma de pagamento" className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#7353a6] hover:underline disabled:opacity-50"><CreditCard size={12} /> {paymentMethodLabel(item.paymentMethod)}</button>}
-                                </div>
-                                <p className="flex flex-wrap items-center gap-x-1.5 text-sm text-[#7d7087]"><Scissors size={14} /> {item.services.length ? item.services.join(' · ') : 'Sem serviços definidos'}</p>
-                                {profileForAppointment(item)?.notes && <p className="mt-1.5 line-clamp-2 rounded-lg bg-[#fff4dc] px-2.5 py-1.5 text-[11px] font-semibold text-[#80591d]">Obs.: {profileForAppointment(item)?.notes}</p>}
-                                {item.planType !== 'single' && <p className="mt-1.5 text-[11px] font-semibold text-[#92849c]">{stats.completed} concluídas · {stats.absent} faltas</p>}
-                                <PaidTotal item={item} />
-                              </div>
-                              <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center sm:justify-end sm:gap-1.5">
-                                <div className="col-span-2 flex items-center gap-1 sm:contents">
-                                  <Button aria-label="Mover para o dia anterior" title="Mover para o dia anterior" variant="ghost" size="icon-sm" onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, -1) }, 'Movido para o dia anterior')} className="h-10 w-10 border border-[#ebe4f0] sm:h-8 sm:w-8 sm:border-0"><ChevronLeft /></Button>
-                                  <Button aria-label="Mover para o próximo dia" title="Mover para o próximo dia" variant="ghost" size="icon-sm" onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, 1) }, 'Movido para o próximo dia')} className="h-10 w-10 border border-[#ebe4f0] sm:h-8 sm:w-8 sm:border-0"><ChevronRight /></Button>
-                                  <span className="ml-1 text-xs font-semibold text-[#92849c] sm:hidden">Mover dia</span>
-                                </div>
-                                {item.planType !== 'single' && <Button variant="outline" onClick={() => openPlan(item)} className="h-11 w-full px-2.5 text-xs font-bold text-[#7353a6] sm:h-9 sm:w-auto"><ListChecks /> Ver plano</Button>}
-                                <Button variant="outline" onClick={() => openPetHistory(item)} className="h-11 w-full px-2.5 text-xs font-bold text-[#7353a6] sm:h-9 sm:w-auto"><History /> Histórico</Button>
-                                <Button variant="outline" onClick={() => openDelete(item)} className="h-11 w-full border-[#ead0cc] px-2.5 text-xs font-bold text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f] sm:h-9 sm:w-auto"><Trash2 /> {item.planType === 'single' ? 'Apagar banho' : 'Apagar plano'}</Button>
-                                {isRenewable ? (
-                                  <Button onClick={() => openRenew(item)} className="h-11 w-full bg-[#9b6bc2] px-3 text-xs font-bold text-white hover:bg-[#8254a8] sm:h-9 sm:w-auto"><RefreshCw /> Renovar</Button>
-                                ) : item.status === 'scheduled' ? (
-                                  <>
-                                    <Button variant="outline" onClick={() => mutate({ action: 'status', id: item.id, status: 'absent' }, 'Falta registrada')} className="h-11 w-full px-2.5 text-xs font-bold text-[#93503f] sm:h-9 sm:w-auto"><X /> Falta</Button>
-                                    <Button onClick={() => mutate({ action: 'status', id: item.id, status: 'completed' }, 'Atendimento concluído')} className="h-11 w-full bg-[#7353a6] px-3 text-xs font-bold text-white hover:bg-[#5e3f90] sm:h-9 sm:w-auto"><Check /> Concluir</Button>
-                                  </>
-                                ) : (
-                                  <Button variant="ghost" onClick={() => mutate({ action: 'status', id: item.id, status: 'scheduled' }, 'Atendimento reaberto')} className="col-span-2 h-11 w-full px-2.5 text-xs font-bold text-[#76687f] sm:h-9 sm:w-auto">{item.status === 'completed' ? 'Concluído' : 'Faltou'} · reabrir</Button>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <button onClick={() => openNew(date)} className="flex w-full items-center gap-3 px-5 py-4 text-left text-sm font-semibold text-[#81748a] transition hover:bg-white">
-                        <span className="grid h-8 w-8 place-items-center rounded-lg border border-dashed border-[#c5b7d3]">{draggingId && dropTarget === date ? <Check size={16} /> : <Plus size={16} />}</span>{draggingId && dropTarget === date ? 'Solte aqui para mudar o dia' : 'Adicionar dog neste dia'}
-                      </button>
-                    )}
-                  </article>
-                );
-              })}
-            </div>
-          )}
-        </section>
+        <AgendaWorkspace appointments={appointments} profiles={petProfiles} loading={loading}
+          renderAppointment={renderCompactAppointment} renderDayActions={dayActions}
+          onNew={openNew} onOpenProfile={openPetHistory} onScheduleProfile={scheduleProfile}
+          onViewChange={() => setSelectedIds([])} draggingId={draggingId} dropTarget={dropTarget}
+          onDragOver={(event, date) => { if (draggingId) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTarget(date); } }}
+          onDrop={dropOnDay} />
 
         <aside className="space-y-4 lg:sticky lg:top-[108px] lg:self-start">
-          <div className="rounded-2xl bg-[#7353a6] p-5 text-white shadow-[0_10px_30px_rgba(115,83,166,0.22)]">
-            <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#e4d8f1]">Resumo de hoje</p>
+          <div className="rounded-2xl border border-[#e4dced] bg-white p-5 text-[#493852]">
+            <button type="button" onClick={() => { changeDailyAgendaDate(today); setTodayOpen(true); }} className="text-sm font-bold text-[#694594] hover:underline">Resumo de hoje →</button>
             <div className="mt-5 grid grid-cols-3 gap-2">
-              <div><strong className="font-heading text-3xl">{todayAppointments.length}</strong><span className="mt-1 block text-[11px] text-[#eee5f7]">agendados</span></div>
-              <div><strong className="font-heading text-3xl">{todayAppointments.filter((item) => item.status === 'completed').length}</strong><span className="mt-1 block text-[11px] text-[#eee5f7]">concluídos</span></div>
-              <div><strong className="font-heading text-3xl">{todayAppointments.filter((item) => item.status === 'absent').length}</strong><span className="mt-1 block text-[11px] text-[#eee5f7]">faltas</span></div>
+              <div><strong className="font-heading text-3xl">{todayAppointments.length}</strong><span className="mt-1 block text-xs text-[#6c6374]">agendados</span></div>
+              <div><strong className="font-heading text-3xl">{todayAppointments.filter((item) => item.status === 'completed').length}</strong><span className="mt-1 block text-xs text-[#6c6374]">concluídos</span></div>
+              <div><strong className="font-heading text-3xl">{todayAppointments.filter((item) => item.status === 'absent').length}</strong><span className="mt-1 block text-xs text-[#6c6374]">faltas</span></div>
             </div>
           </div>
 
@@ -1472,48 +1281,14 @@ export default function Home() {
             {dailyAgendaDate !== today && <Button type="button" variant="ghost" onClick={() => changeDailyAgendaDate(today)} className="col-span-3 h-9 text-xs font-bold text-[#7353a6]"><CalendarDays /> Voltar para hoje</Button>}
           </div>
           <div className="grid grid-cols-3 gap-2">
-            <div className="rounded-xl bg-[#f1edf5] p-3 text-center"><strong className="font-heading text-2xl font-extrabold text-[#7353a6]">{dailyAppointments.filter((item) => item.status === 'scheduled').length}</strong><span className="block text-[10px] font-bold text-[#81748a]">em aberto</span></div>
-            <div className="rounded-xl bg-[#e8f4eb] p-3 text-center"><strong className="font-heading text-2xl font-extrabold text-[#4f765c]">{dailyAppointments.filter((item) => item.status === 'completed').length}</strong><span className="block text-[10px] font-bold text-[#678471]">concluídos</span></div>
-            <div className="rounded-xl bg-[#f7e7e2] p-3 text-center"><strong className="font-heading text-2xl font-extrabold text-[#ad533d]">{dailyAppointments.filter((item) => item.status === 'absent').length}</strong><span className="block text-[10px] font-bold text-[#956c61]">faltas</span></div>
+            <div className="rounded-xl bg-[#f1edf5] p-3 text-center"><strong className="font-heading text-2xl font-extrabold text-[#7353a6]">{dailyAppointments.filter((item) => item.status === 'scheduled').length}</strong><span className="block text-xs font-bold text-[#81748a]">em aberto</span></div>
+            <div className="rounded-xl bg-[#e8f4eb] p-3 text-center"><strong className="font-heading text-2xl font-extrabold text-[#4f765c]">{dailyAppointments.filter((item) => item.status === 'completed').length}</strong><span className="block text-xs font-bold text-[#678471]">concluídos</span></div>
+            <div className="rounded-xl bg-[#f7e7e2] p-3 text-center"><strong className="font-heading text-2xl font-extrabold text-[#ad533d]">{dailyAppointments.filter((item) => item.status === 'absent').length}</strong><span className="block text-xs font-bold text-[#956c61]">faltas</span></div>
           </div>
           {dayActions(dailyAgendaDate, dailyAppointments)}
           {dailyAppointments.length ? (
             <div className="space-y-2.5">
-              {dailyAppointments.map((item) => (
-                <article key={`today-${item.id}`} className={`appointment-card rounded-2xl border p-4 ${cardColors[item.status]} ${selectedIds.includes(item.id) && item.status === 'scheduled' ? 'appointment-selected' : ''}`}>
-                  {item.status === 'scheduled' && <label className="mb-3 flex min-h-8 cursor-pointer items-center gap-2 text-sm font-semibold">{selectionCheckbox(item)} Selecionar banho</label>}
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="flex min-w-0 items-start gap-3">
-                      <span className="grid h-10 min-w-14 shrink-0 place-items-center rounded-xl bg-[#eee6f7] px-2 font-heading text-sm font-extrabold text-[#7353a6]">{item.scheduledTime}</span>
-                      <div>
-                        <p className="font-heading text-base font-extrabold">{item.dogName || 'Cachorro sem nome'}</p>
-                        {item.ownerName && <p className="text-[11px] font-semibold text-[#92849c]">Dono: {item.ownerName}</p>}
-                        {item.cpf && <p className="text-[10px] font-semibold text-[#9b8ca5]">CPF: {item.cpf}</p>}
-                        <p className="mt-1 text-xs text-[#81748a]">{planLabels[item.planType]} · sessão {item.sessionNumber} de {item.totalSessions}</p>
-                        {item.paymentMethod && <button type="button" onClick={() => editPaymentMethod(item)} className="mt-1 flex items-center gap-1 text-[11px] font-semibold text-[#7353a6] hover:underline disabled:opacity-50"><CreditCard size={12} /> {paymentMethodLabel(item.paymentMethod)}</button>}
-                      </div>
-                    </div>
-                    <span className={`rounded-full px-2.5 py-1 text-[11px] font-extrabold ${item.status === 'completed' ? 'bg-[#e8f4eb] text-[#4f765c]' : item.status === 'absent' ? 'bg-[#f7e7e2] text-[#ad533d]' : 'bg-[#f1edf5] text-[#776a80]'}`}>{statusLabels[item.status]}</span>
-                  </div>
-                  <p className="mt-3 flex flex-wrap items-center gap-x-1.5 text-xs text-[#7d7087]"><Scissors size={13} /> {item.services.length ? item.services.join(' · ') : 'Sem serviços definidos'}</p>
-                  {profileForAppointment(item)?.notes && <p className="mt-2 rounded-lg bg-[#fff4dc] px-2.5 py-1.5 text-xs font-semibold text-[#80591d]">Obs.: {profileForAppointment(item)?.notes}</p>}
-                  <PaidTotal item={item} />
-                  <div className="mt-3 grid grid-cols-2 gap-2 border-t border-[#eee8f3] pt-3 sm:flex sm:flex-wrap sm:items-center sm:gap-1.5">
-                    {item.whatsapp && <button type="button" onClick={() => openWhatsapp(item)} className="flex h-11 items-center justify-center gap-2 rounded-lg bg-[#e6f7eb] px-3 text-xs font-bold text-[#1e8b4c] sm:grid sm:h-8 sm:w-8 sm:p-0" aria-label="Abrir WhatsApp"><MessageCircle size={16} /><span className="sm:hidden">WhatsApp</span></button>}
-                    <Button variant="outline" size="sm" onClick={() => editFromOverview(item)} className="h-11 w-full sm:h-8 sm:w-auto"><Pencil /> Editar</Button>
-                    <Button variant="outline" size="sm" onClick={() => { setTodayOpen(false); openPetHistory(item); }} className="h-11 w-full text-[#7353a6] sm:h-8 sm:w-auto"><History /> Histórico</Button>
-                    {item.planType !== 'single' && <Button variant="outline" size="sm" onClick={() => openPlanFromToday(item)} className="h-11 w-full text-[#7353a6] sm:h-8 sm:w-auto"><ListChecks /> Ver plano</Button>}
-                    {item.status === 'scheduled' ? (
-                      <>
-                        <Button variant="outline" size="sm" onClick={() => mutate({ action: 'status', id: item.id, status: 'absent' }, 'Falta registrada')} className="h-11 w-full text-[#93503f] sm:h-8 sm:w-auto"><X /> Falta</Button>
-                        <Button size="sm" onClick={() => mutate({ action: 'status', id: item.id, status: 'completed' }, 'Atendimento concluído')} className="h-11 w-full bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90] sm:h-8 sm:w-auto"><Check /> Concluir</Button>
-                      </>
-                    ) : (
-                      <Button variant="ghost" size="sm" onClick={() => mutate({ action: 'status', id: item.id, status: 'scheduled' }, 'Atendimento reaberto')} className="h-11 w-full font-bold text-[#76687f] sm:h-8 sm:w-auto">Reabrir</Button>
-                    )}
-                  </div>
-                </article>
-              ))}
+              {dailyAppointments.map((item) => renderCompactAppointment(item, true))}
             </div>
           ) : (
             <div className="rounded-2xl border border-dashed border-[#cdbce0] bg-[#f7f3fb] p-7 text-center">
@@ -1565,10 +1340,11 @@ export default function Home() {
             <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><History className="text-[#7353a6]" /> Histórico de {petHistoryProfile?.dogName || 'pet'}</DialogTitle>
             <DialogDescription>{petHistoryProfile?.ownerName || 'Dono não informado'}{petHistoryProfile?.whatsapp ? ` · ${petHistoryProfile.whatsapp}` : ''} · {petHistoryAppointments.length} {petHistoryAppointments.length === 1 ? 'atendimento' : 'atendimentos'}</DialogDescription>
           </DialogHeader>
+          {petHistoryProfile?.cpf && <p className="text-sm text-[#6c6374]">CPF: {petHistoryProfile.cpf}</p>}
           <div className="grid grid-cols-3 gap-2">
-            <div className="rounded-xl bg-[#f1edf5] p-3 text-center"><strong className="font-heading text-2xl text-[#7353a6]">{petHistoryAppointments.length}</strong><span className="block text-[10px] font-bold text-[#81748a]">total</span></div>
-            <div className="rounded-xl bg-[#e8f4eb] p-3 text-center"><strong className="font-heading text-2xl text-[#4f765c]">{petHistoryAppointments.filter((item) => item.status === 'completed').length}</strong><span className="block text-[10px] font-bold text-[#678471]">concluídos</span></div>
-            <div className="rounded-xl bg-[#f7e7e2] p-3 text-center"><strong className="font-heading text-2xl text-[#ad533d]">{petHistoryAppointments.filter((item) => item.status === 'absent').length}</strong><span className="block text-[10px] font-bold text-[#956c61]">faltas</span></div>
+            <div className="rounded-xl bg-[#f1edf5] p-3 text-center"><strong className="font-heading text-2xl text-[#7353a6]">{petHistoryAppointments.length}</strong><span className="block text-xs font-bold text-[#81748a]">total</span></div>
+            <div className="rounded-xl bg-[#e8f4eb] p-3 text-center"><strong className="font-heading text-2xl text-[#4f765c]">{petHistoryAppointments.filter((item) => item.status === 'completed').length}</strong><span className="block text-xs font-bold text-[#678471]">concluídos</span></div>
+            <div className="rounded-xl bg-[#f7e7e2] p-3 text-center"><strong className="font-heading text-2xl text-[#ad533d]">{petHistoryAppointments.filter((item) => item.status === 'absent').length}</strong><span className="block text-xs font-bold text-[#956c61]">faltas</span></div>
           </div>
           <div className="rounded-2xl border border-[#e5d9bd] bg-[#fff9eb] p-4">
             <label className="block"><span className="mb-1.5 block text-xs font-extrabold text-[#755624]">Observações permanentes do pet</span><textarea value={petNotesDraft} onChange={(event) => setPetNotesDraft(event.target.value)} rows={3} placeholder="Alergias, comportamento, shampoo específico, cuidados especiais..." className="w-full resize-y rounded-xl border border-[#e6d7b5] bg-white p-3 text-sm leading-6 outline-none focus:ring-2 focus:ring-[#c69a45]/25" /></label>
@@ -1579,6 +1355,7 @@ export default function Home() {
             {petHistoryAppointments.length === 0 ? <p className="rounded-xl bg-[#f1ecf7] p-5 text-center text-sm font-semibold text-[#81748a]">Nenhum atendimento encontrado para este pet.</p> : petHistoryAppointments.map((item) => (
               <article key={`history-${item.id}`} className={`rounded-2xl border p-3.5 ${cardColors[item.status]}`}>
                 <div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-extrabold capitalize">{prettyDate(item.scheduledDate)} · {item.scheduledTime}</p><p className="mt-1 text-xs text-[#81748a]">{planLabels[item.planType]} · sessão {item.sessionNumber} de {item.totalSessions}</p></div><span className={`appointment-status ${cardColors[item.status]}`}>{statusLabels[item.status]}</span></div>
+                {item.planType !== 'single' && <PlanSessionDates sessions={planSessions.get(item.groupId) ?? []} currentId={item.id} onOpen={() => { setPetHistoryOpen(false); openPlan(item); }} />}
                 <p className="mt-2 text-xs text-[#6f6179]"><Scissors className="mr-1 inline" size={13} /> {item.services.length ? item.services.join(' · ') : 'Sem serviços definidos'}</p>
                 <p className="mt-1 text-xs font-semibold text-[#81748a]">{item.paid ? `Pago${item.paymentMethod ? ` · ${paymentMethodLabel(item.paymentMethod)}` : ''}` : 'Pagamento pendente'}{formatMoney(item.amountCents) ? ` · ${formatMoney(item.amountCents)}` : ''}</p>
               </article>
@@ -1607,7 +1384,7 @@ export default function Home() {
                   {formatMoney(selectedPlanHead.amountCents) && <span className="text-xs font-bold text-[#6f6179]">{formatMoney(selectedPlanHead.amountCents)}</span>}
                   {selectedPlanHead.paymentMethod && <button type="button" onClick={() => editPaymentMethod(selectedPlanHead)} title="Alterar forma de pagamento" className="inline-flex items-center gap-1 text-xs font-bold text-[#7353a6] hover:underline disabled:opacity-50"><CreditCard size={13} /> {paymentMethodLabel(selectedPlanHead.paymentMethod)}</button>}
                 </div>
-                <div className="flex items-center gap-2 text-[11px] font-bold text-[#81748a]">
+                <div className="flex items-center gap-2 text-xs font-bold text-[#81748a]">
                   <span>{selectedPlanStats.completed} concluídos</span><span>·</span><span>{selectedPlanStats.absent} faltas</span><span>·</span><span>{selectedPlanStats.scheduled} abertos</span>
                 </div>
               </div>
@@ -1639,11 +1416,11 @@ export default function Home() {
                       <p className="mt-1 text-xs text-[#81748a]">{session.services.length ? session.services.join(' · ') : 'Sem serviços definidos'}</p>
                     </div>
                   </div>
-                  <span className={`rounded-full px-2.5 py-1 text-[11px] font-extrabold ${session.status === 'completed' ? 'bg-[#e8f4eb] text-[#4f765c]' : session.status === 'absent' ? 'bg-[#f7e7e2] text-[#ad533d]' : 'bg-[#f1edf5] text-[#776a80]'}`}>{statusLabels[session.status]}</span>
+                  <span className={`rounded-full px-2.5 py-1 text-xs font-extrabold ${session.status === 'completed' ? 'bg-[#e8f4eb] text-[#4f765c]' : session.status === 'absent' ? 'bg-[#f7e7e2] text-[#ad533d]' : 'bg-[#f1edf5] text-[#776a80]'}`}>{statusLabels[session.status]}</span>
                 </div>
                 <div className="mt-3 grid gap-2 border-t border-[#eee8f3] pt-3 sm:grid-cols-[minmax(170px,1fr)_auto] sm:items-end">
                   <label>
-                    <span className="mb-1 block text-[10px] font-extrabold uppercase tracking-[0.08em] text-[#8b7c95]">Alterar data</span>
+                    <span className="mb-1 block text-xs font-extrabold uppercase tracking-[0.08em] text-[#8b7c95]">Alterar data</span>
                     <Input
                       type="date"
 
@@ -1918,14 +1695,14 @@ export default function Home() {
                   {matchingPets.map((pet) => (
                     <button key={pet.key} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { selectPet(pet); setPetSearchFocused(false); }} className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-[#f2ecf8]">
                       <span className="min-w-0"><strong className="block truncate text-sm text-[#493852]">{pet.dogName || 'Pet sem nome'}</strong><small className="block truncate text-xs text-[#84748e]">{pet.ownerName || 'Dono não informado'}{pet.whatsapp ? ` · ${pet.whatsapp}` : ''}</small></span>
-                      <span className="shrink-0 text-[10px] font-extrabold text-[#7353a6]">USAR</span>
+                      <span className="shrink-0 text-xs font-extrabold text-[#7353a6]">USAR</span>
                     </button>
                   ))}
                 </div>
               )}
               {(form.petId || form.clientId || (petSearch && form.dogName))
                 ? <p className="mt-2 text-xs font-semibold text-[#7353a6]">Dados, horário, valor e serviços favoritos preenchidos automaticamente. Você pode alterar tudo abaixo.</p>
-                : <p className="mt-2 text-[11px] text-[#897a93]">Não encontrou? Preencha abaixo e o cliente ficará disponível nos próximos agendamentos.</p>}
+                : <p className="mt-2 text-xs text-[#897a93]">Não encontrou? Preencha abaixo e o cliente ficará disponível nos próximos agendamentos.</p>}
               {selectedFormProfile?.notes && <p className="mt-2 rounded-lg bg-[#fff4dc] px-3 py-2 text-xs font-semibold leading-5 text-[#80591d]"><strong>Observações do pet:</strong> {selectedFormProfile.notes}</p>}
             </div>
             <div className="grid gap-3 sm:grid-cols-3">
@@ -1962,7 +1739,7 @@ export default function Home() {
                     }}
                     className={`rounded-xl border p-2.5 text-left transition sm:p-3 ${form.planType === plan ? 'border-[#7353a6] bg-[#eee6f7] ring-1 ring-[#7353a6]' : 'border-[#e4dced] bg-white hover:border-[#bbaacd]'}`}
                   >
-                    <strong className="block text-xs sm:text-sm">{planLabels[plan]}</strong><span className="mt-1 block text-[10px] leading-4 text-[#81748a] sm:text-[11px]">{planDescriptions[plan]}</span>
+                    <strong className="block text-xs sm:text-sm">{planLabels[plan]}</strong><span className="mt-1 block text-xs leading-4 text-[#81748a] sm:text-xs">{planDescriptions[plan]}</span>
                   </button>
                 ))}
               </div>
@@ -1988,7 +1765,7 @@ export default function Home() {
                         sessionServices: Array.from({ length: totalSessionsFor(form.planType) }, () => [...selected]),
                       });
                     }}
-                    className="text-[11px] font-extrabold text-[#7353a6] hover:underline"
+                    className="text-xs font-extrabold text-[#7353a6] hover:underline"
                   >
                     Repetir serviços em todas
                   </button>
@@ -2005,7 +1782,7 @@ export default function Home() {
                       className={`min-w-[92px] rounded-xl border px-3 py-2 text-left transition ${activeServiceSession === index ? 'border-[#7353a6] bg-[#eee6f7] ring-1 ring-[#7353a6]' : 'border-[#ded7e7] bg-[#fbf9fd]'}`}
                     >
                       <strong className="flex items-center gap-1 text-xs">Sessão {index + 1}{form.sessionCompleted[index] && <CheckCircle2 size={13} className="text-[#4f765c]" />}</strong>
-                      <span className="mt-0.5 block text-[10px] capitalize text-[#81748a]">{new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short' }).format(new Date(`${date}T12:00:00`))}</span>
+                      <span className="mt-0.5 block text-xs capitalize text-[#81748a]">{new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short' }).format(new Date(`${date}T12:00:00`))}</span>
                     </button>
                   );
                 })}
@@ -2047,7 +1824,7 @@ export default function Home() {
                   <small className="mt-0.5 block text-xs text-[#85768f]">Será cadastrada como concluída</small>
                 </span>
               </label>
-              <p className="mb-2 text-[11px] font-semibold text-[#81748a]">Escolha o que foi ou será feito na sessão {activeServiceSession + 1}</p>
+              <p className="mb-2 text-xs font-semibold text-[#81748a]">Escolha o que foi ou será feito na sessão {activeServiceSession + 1}</p>
               <div className="flex flex-wrap gap-2">
                 {serviceOptions.map((service) => {
                   const selected = (form.sessionServices[activeServiceSession] ?? []).includes(service);
@@ -2195,9 +1972,9 @@ export default function Home() {
             ) : teamUsers.map((user) => (
               <div key={user.id} className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border p-3.5 ${user.active ? 'border-[#e4dced] bg-white' : 'border-[#eadfdf] bg-[#faf6f6] opacity-70'}`}>
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-extrabold">{user.name || user.email} {user.id === currentUser?.id && <span className="ml-1 text-[10px] text-[#7353a6]">VOCÊ</span>}</p>
+                  <p className="truncate text-sm font-extrabold">{user.name || user.email} {user.id === currentUser?.id && <span className="ml-1 text-xs text-[#7353a6]">VOCÊ</span>}</p>
                   <p className="truncate text-xs text-[#81748a]">{user.email}</p>
-                  <p className="mt-1 text-[10px] font-semibold text-[#9a8ca3]">{user.lastLoginAt ? `Último acesso: ${new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(user.lastLoginAt))}` : 'Ainda não entrou'}</p>
+                  <p className="mt-1 text-xs font-semibold text-[#9a8ca3]">{user.lastLoginAt ? `Último acesso: ${new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(user.lastLoginAt))}` : 'Ainda não entrou'}</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <select disabled={user.id === currentUser?.id || panelLoading} value={user.role} onChange={(event) => updateTeamUser(user, { role: event.target.value as 'admin' | 'staff' })} aria-label={`Permissão de ${user.name || user.email}`} className="h-9 rounded-lg border border-input bg-white px-2 text-xs font-bold"><option value="staff">Equipe</option><option value="admin">Admin</option></select>

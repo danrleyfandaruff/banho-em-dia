@@ -54,13 +54,13 @@ body {
 }
 
 .appointment-card {
-  border-left: 4px solid var(--status-accent);
-  background: var(--status-background);
+  border-left: 2px solid #e5ddec;
+  background: #fff;
 }
 .appointment-open { --status-accent: #9861c4; --status-background: #faf5ff; --status-text: #6b368e; }
 .appointment-completed { --status-accent: #29986c; --status-background: #e5f5ec; --status-text: #1b6747; }
 .appointment-absent { --status-accent: #d27a4f; --status-background: #fff0e7; --status-text: #994821; }
-.appointment-selected { background: #ede0fc; box-shadow: inset 0 0 0 1px #9861c4; }
+.appointment-selected { background: #f4effa; box-shadow: inset 0 0 0 1px #9861c4; }
 .appointment-status {
   display: inline-flex;
   align-items: center;
