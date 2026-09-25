@@ -231,6 +231,9 @@ export default function Home() {
   const [authStatus, setAuthStatus] = useState<'loading' | 'authorized' | 'signed_out' | 'forbidden'>('loading');
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [blockedEmail, setBlockedEmail] = useState('');
+  const [loginForm, setLoginForm] = useState({ email: '', password: '' });
+  const [loginSaving, setLoginSaving] = useState(false);
+  const [loginError, setLoginError] = useState('');
   const [loading, setLoading] = useState(true);
   const [savingForm, setSavingForm] = useState('');
   const mutationQueue = useRef<Promise<unknown>>(Promise.resolve());
@@ -278,7 +281,7 @@ export default function Home() {
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [panelLoading, setPanelLoading] = useState(false);
   const [teamSaving, setTeamSaving] = useState(false);
-  const [newUser, setNewUser] = useState({ name: '', email: '', role: 'staff' as 'admin' | 'staff' });
+  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'staff' as 'admin' | 'staff' });
   const today = localDateString();
 
   useEffect(() => {
@@ -287,8 +290,9 @@ export default function Home() {
         const sessionResponse = await fetch('/api/session');
         const session = await sessionResponse.json() as { user: CurrentUser; email?: string };
         if (!sessionResponse.ok) {
-          setAuthStatus(sessionResponse.status === 401 ? 'signed_out' : 'forbidden');
+          setAuthStatus(sessionResponse.status === 403 ? 'forbidden' : 'signed_out');
           setBlockedEmail(session.email ?? '');
+          if (sessionResponse.status === 503) setLoginError('O Supabase ainda não foi configurado neste ambiente.');
           return;
         }
         setCurrentUser(session.user);
@@ -803,11 +807,15 @@ export default function Home() {
       });
       const data = await response.json() as { appointments?: Appointment[]; users?: TeamUser[]; logs?: AuditLog[]; error?: string; blockers?: string[]; pendingCount?: number };
       if (!response.ok) {
-        setNotice(data.error === 'email_exists' ? 'Este e-mail já possui acesso.' : 'Informe um e-mail válido.');
+        setNotice(data.error === 'email_exists'
+          ? 'Este e-mail já possui acesso.'
+          : data.error === 'password_too_short'
+            ? 'A senha precisa ter pelo menos 6 caracteres.'
+            : 'Confira os dados informados.');
         return;
       }
       setTeamUsers(data.users ?? []);
-      setNewUser({ name: '', email: '', role: 'staff' });
+      setNewUser({ name: '', email: '', password: '', role: 'staff' });
       setNotice('Novo acesso criado');
     } catch {
       setNotice('Não foi possível criar o acesso.');
@@ -847,6 +855,63 @@ export default function Home() {
     }
   }
 
+  async function login(event: FormEvent) {
+    event.preventDefault();
+    if (loginSaving) return;
+    setLoginSaving(true);
+    setLoginError('');
+    try {
+      const response = await fetch('/api/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(loginForm),
+      });
+      const data = await response.json() as { error?: string; email?: string };
+      if (!response.ok) {
+        if (response.status === 403) {
+          setBlockedEmail(data.email ?? loginForm.email);
+          setAuthStatus('forbidden');
+          return;
+        }
+        setLoginError(data.error === 'supabase_not_configured'
+          ? 'O Supabase ainda não foi configurado neste ambiente.'
+          : 'E-mail ou senha incorretos.');
+        return;
+      }
+      window.location.reload();
+    } catch {
+      setLoginError('Não foi possível entrar. Tente novamente.');
+    } finally {
+      setLoginSaving(false);
+    }
+  }
+
+  async function logout() {
+    await fetch('/api/session', { method: 'DELETE' });
+    setCurrentUser(null);
+    setAppointments([]);
+    setLoginForm({ email: '', password: '' });
+    setLoginError('');
+    setAuthStatus('signed_out');
+  }
+
+  const loginFields = (
+    <form onSubmit={login} className="mt-6 space-y-3 text-left">
+      <label className="block">
+        <span className="mb-1.5 block text-xs font-bold text-[#6f6179]">E-mail</span>
+        <Input required type="email" autoComplete="email" value={loginForm.email} onChange={(event) => setLoginForm({ ...loginForm, email: event.target.value })} placeholder="voce@email.com" className="h-12 bg-white" />
+      </label>
+      <label className="block">
+        <span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Senha</span>
+        <Input required type="password" autoComplete="current-password" value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} placeholder="Sua senha" className="h-12 bg-white" />
+      </label>
+      {loginError && <p role="alert" className="rounded-xl bg-[#f8e7e5] px-3 py-2.5 text-sm font-semibold text-[#973d34]">{loginError}</p>}
+      <Button type="submit" disabled={loginSaving} className="h-12 w-full rounded-xl bg-[#7353a6] text-sm font-extrabold text-white shadow-[0_8px_24px_rgba(115,83,166,0.24)] hover:bg-[#5e3f90]">
+        {loginSaving ? <LoaderCircle className="animate-spin" /> : <ShieldCheck size={19} />} {loginSaving ? 'Entrando...' : 'Entrar'}
+      </Button>
+    </form>
+  );
+
   if (authStatus === 'loading') {
     return (
       <main className="grid min-h-screen place-items-center bg-[#f7f3fb] px-5 text-[#302638]">
@@ -862,10 +927,8 @@ export default function Home() {
           <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#7353a6] text-white"><PawPrint size={28} /></span>
           <p className="mt-5 text-xs font-extrabold uppercase tracking-[0.16em] text-[#8b7c95]">Pet shop</p>
           <h1 className="mt-1 font-heading text-3xl font-extrabold tracking-[-0.04em]">HEIN PET SALON</h1>
-          <p className="mx-auto mt-3 max-w-xs text-sm leading-6 text-[#786b82]">Entre com a conta autorizada pela administração para acessar a agenda.</p>
-          <a href="/signin-with-chatgpt?return_to=%2F" target="_top" className="mt-7 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#7353a6] px-4 text-sm font-extrabold text-white shadow-[0_8px_24px_rgba(115,83,166,0.24)] transition hover:bg-[#5e3f90]">
-            <ShieldCheck size={19} /> Entrar com ChatGPT
-          </a>
+          <p className="mx-auto mt-3 max-w-xs text-sm leading-6 text-[#786b82]">Entre com o e-mail e a senha cadastrados pela administração.</p>
+          {loginFields}
         </section>
       </main>
     );
@@ -876,10 +939,10 @@ export default function Home() {
       <main className="grid min-h-screen place-items-center bg-[#f7f3fb] px-5 text-[#302638]">
         <section className="w-full max-w-md rounded-3xl border border-[#e4dced] bg-[#fffbff] p-8 text-center shadow-[0_18px_60px_rgba(91,67,116,0.13)]">
           <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#eee6f7] text-[#7353a6]"><Users size={27} /></span>
-          <h1 className="mt-5 font-heading text-2xl font-extrabold">Acesso ainda não liberado</h1>
-          <p className="mt-3 text-sm leading-6 text-[#786b82]">Peça ao administrador para cadastrar este e-mail na equipe:</p>
+          <h1 className="mt-5 font-heading text-2xl font-extrabold">Acesso bloqueado</h1>
+          <p className="mt-3 text-sm leading-6 text-[#786b82]">O login existe, mas a flag de acesso ainda não está liberada para:</p>
           {blockedEmail && <p className="mt-2 rounded-xl bg-[#f1ecf7] px-3 py-2 text-sm font-extrabold text-[#7353a6]">{blockedEmail}</p>}
-          <a href="/signout-with-chatgpt?return_to=%2F" target="_top" className="mt-6 inline-flex items-center gap-2 text-sm font-bold text-[#7353a6] hover:underline"><LogOut size={16} /> Entrar com outra conta</a>
+          <button type="button" onClick={() => { setAuthStatus('signed_out'); setBlockedEmail(''); setLoginForm({ email: '', password: '' }); }} className="mt-6 inline-flex items-center gap-2 text-sm font-bold text-[#7353a6] hover:underline"><LogOut size={16} /> Entrar com outra conta</button>
         </section>
       </main>
     );
@@ -910,7 +973,7 @@ export default function Home() {
               <p className="max-w-36 truncate text-xs font-extrabold">{currentUser?.name}</p>
               <p className="text-[10px] font-semibold text-[#8b7c95]">{currentUser?.role === 'admin' ? 'Administrador' : 'Equipe'}</p>
             </div>
-            <a href="/signout-with-chatgpt?return_to=%2F" target="_top" aria-label="Sair" title="Sair" className="grid h-8 w-8 place-items-center rounded-lg text-[#7f7189] transition hover:bg-[#eee7f5] sm:h-9 sm:w-9"><LogOut size={17} /></a>
+            <button type="button" onClick={logout} aria-label="Sair" title="Sair" className="grid h-8 w-8 place-items-center rounded-lg text-[#7f7189] transition hover:bg-[#eee7f5] sm:h-9 sm:w-9"><LogOut size={17} /></button>
             <Button onClick={() => openNew()} className="h-10 rounded-xl bg-[#9b6bc2] px-2.5 font-bold text-white shadow-[0_5px_16px_rgba(115,83,166,0.24)] hover:bg-[#8254a8] sm:h-11 sm:px-4">
               <Plus /> <span className="hidden sm:inline">Novo agendamento</span><span className="sm:hidden">Novo</span>
             </Button>
@@ -1712,13 +1775,14 @@ export default function Home() {
         <DialogContent className="mobile-sheet max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-4 sm:max-w-2xl sm:p-5">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><Users className="text-[#7353a6]" /> Equipe e acessos</DialogTitle>
-            <DialogDescription>Cadastre o e-mail usado na conta do ChatGPT. A pessoa entra pelo mesmo endereço do sistema.</DialogDescription>
+            <DialogDescription>Crie o e-mail e a senha de cada funcionário. A flag de acesso pode ser ligada ou desligada aqui.</DialogDescription>
           </DialogHeader>
           <form onSubmit={addTeamUser} className="rounded-2xl border border-[#dfd5e8] bg-[#f7f3fb] p-4">
             <p className="mb-3 flex items-center gap-2 text-sm font-extrabold text-[#574761]"><UserPlus size={17} /> Criar novo acesso</p>
-            <div className="grid gap-3 sm:grid-cols-[1fr_1.35fr_140px]">
+            <div className="grid gap-3 sm:grid-cols-2">
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Nome</span><Input value={newUser.name} onChange={(event) => setNewUser({ ...newUser, name: event.target.value })} placeholder="Ex.: Maria" className="h-11 bg-white" /></label>
-              <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">E-mail da conta</span><Input required type="email" value={newUser.email} onChange={(event) => setNewUser({ ...newUser, email: event.target.value })} placeholder="maria@email.com" className="h-11 bg-white" /></label>
+              <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">E-mail</span><Input required type="email" autoComplete="off" value={newUser.email} onChange={(event) => setNewUser({ ...newUser, email: event.target.value })} placeholder="maria@email.com" className="h-11 bg-white" /></label>
+              <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Senha inicial</span><Input required minLength={6} type="password" autoComplete="new-password" value={newUser.password} onChange={(event) => setNewUser({ ...newUser, password: event.target.value })} placeholder="Mínimo de 6 caracteres" className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Permissão</span><select value={newUser.role} onChange={(event) => setNewUser({ ...newUser, role: event.target.value as 'admin' | 'staff' })} className="h-11 w-full rounded-md border border-input bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#7353a6]/30"><option value="staff">Equipe</option><option value="admin">Administrador</option></select></label>
             </div>
             <Button type="submit" disabled={teamSaving} className="mt-3 bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90]">{teamSaving ? <LoaderCircle className="animate-spin" /> : <Plus />} {teamSaving ? 'Salvando...' : 'Criar acesso'}</Button>

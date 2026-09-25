@@ -1,93 +1,102 @@
-import { env } from 'cloudflare:workers';
+import { cookies } from 'next/headers';
+import type { User } from '@supabase/supabase-js';
+import { createSupabaseAdmin, createSupabaseAuthClient, isSupabaseConfigured } from './supabase';
 
 export type UserRole = 'admin' | 'staff';
 
-export type Identity = {
+export type AuthorizedUser = {
+  id: string;
   userId: string;
   email: string;
   name: string;
-};
-
-export type AuthorizedUser = Identity & {
-  id: string;
   role: UserRole;
 };
 
-type UserRow = {
+type ProfileRow = {
   id: string;
-  chatgpt_user_id: string | null;
   email: string;
   name: string;
   role: string;
-  active: number;
+  can_access: boolean;
   last_login_at: string | null;
 };
 
-const OWNER_USER_ID = '1bf06280-7750-403d-98c0-5b97b31c3b48';
-const OWNER_EMAIL = 'programador.vff@gmail.com';
-const OWNER_NAME = 'Danrley Fandaruff';
+const ACCESS_COOKIE = 'hein-access-token';
+const REFRESH_COOKIE = 'hein-refresh-token';
 
-function decodeName(request: Request) {
-  const encoded = request.headers.get('oai-authenticated-user-full-name');
-  if (!encoded || request.headers.get('oai-authenticated-user-full-name-encoding') !== 'percent-encoded-utf-8') {
-    return '';
-  }
-  try {
-    return decodeURIComponent(encoded);
-  } catch {
-    return '';
-  }
+function cookieOptions(maxAge: number) {
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax' as const,
+    path: '/',
+    maxAge,
+  };
 }
 
-export function getIdentity(request: Request): Identity | null {
-  const userId = request.headers.get('oai-authenticated-user-id');
-  const email = request.headers.get('oai-authenticated-user-email');
-  if (userId && email) {
-    return { userId, email: email.trim().toLowerCase(), name: decodeName(request) || email };
-  }
-
-  if (process.env.NODE_ENV !== 'production') {
-    return { userId: OWNER_USER_ID, email: OWNER_EMAIL, name: OWNER_NAME };
-  }
-
-  return null;
+export async function setSessionCookies(accessToken: string, refreshToken: string, expiresIn = 3600) {
+  const store = await cookies();
+  store.set(ACCESS_COOKIE, accessToken, cookieOptions(expiresIn));
+  store.set(REFRESH_COOKIE, refreshToken, cookieOptions(60 * 60 * 24 * 30));
 }
 
-export async function ensureSecuritySchema() {
-  const db = env.DB;
-  await db.batch([
-    db.prepare(`CREATE TABLE IF NOT EXISTS app_users (
-      id TEXT PRIMARY KEY,
-      chatgpt_user_id TEXT,
-      email TEXT NOT NULL,
-      name TEXT NOT NULL DEFAULT '',
-      role TEXT NOT NULL DEFAULT 'staff',
-      active INTEGER NOT NULL DEFAULT 1,
-      created_by TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL,
-      last_login_at TEXT
-    )`),
-    db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_email ON app_users(email)'),
-    db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_chatgpt_user_id ON app_users(chatgpt_user_id)'),
-    db.prepare('CREATE INDEX IF NOT EXISTS idx_app_users_active ON app_users(active)'),
-    db.prepare(`CREATE TABLE IF NOT EXISTS audit_logs (
-      id TEXT PRIMARY KEY,
-      actor_user_id TEXT NOT NULL DEFAULT '',
-      actor_email TEXT NOT NULL DEFAULT '',
-      actor_name TEXT NOT NULL DEFAULT '',
-      action TEXT NOT NULL,
-      entity_type TEXT NOT NULL,
-      entity_id TEXT NOT NULL DEFAULT '',
-      description TEXT NOT NULL,
-      metadata TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL
-    )`),
-    db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at)'),
-    db.prepare(`INSERT OR IGNORE INTO app_users (
-      id, chatgpt_user_id, email, name, role, active, created_by, created_at
-    ) VALUES (?, ?, ?, ?, 'admin', 1, 'system', ?)`)
-      .bind('owner', OWNER_USER_ID, OWNER_EMAIL, OWNER_NAME, new Date().toISOString()),
-  ]);
+export async function clearSessionCookies() {
+  const store = await cookies();
+  store.set(ACCESS_COOKIE, '', cookieOptions(0));
+  store.set(REFRESH_COOKIE, '', cookieOptions(0));
+}
+
+async function readAuthUser(): Promise<User | null> {
+  if (!isSupabaseConfigured()) return null;
+  const store = await cookies();
+  const accessToken = store.get(ACCESS_COOKIE)?.value;
+  const refreshToken = store.get(REFRESH_COOKIE)?.value;
+  if (!accessToken && !refreshToken) return null;
+
+  const authClient = createSupabaseAuthClient();
+  if (accessToken) {
+    const { data } = await authClient.auth.getUser(accessToken);
+    if (data.user) return data.user;
+  }
+
+  if (!refreshToken) return null;
+  const { data, error } = await authClient.auth.refreshSession({ refresh_token: refreshToken });
+  if (error || !data.session || !data.user) return null;
+  await setSessionCookies(
+    data.session.access_token,
+    data.session.refresh_token,
+    data.session.expires_in,
+  );
+  return data.user;
+}
+
+export async function getSessionIdentity() {
+  const authUser = await readAuthUser();
+  if (!authUser) return { authUser: null, profile: null };
+
+  const admin = createSupabaseAdmin();
+  const { data: profile } = await admin
+    .from('profiles')
+    .select('id,email,name,role,can_access,last_login_at')
+    .eq('id', authUser.id)
+    .maybeSingle<ProfileRow>();
+  return { authUser, profile: profile ?? null };
+}
+
+function authorizedUser(authUser: User, profile: ProfileRow): AuthorizedUser {
+  return {
+    id: profile.id,
+    userId: authUser.id,
+    email: profile.email || authUser.email || '',
+    name: profile.name || profile.email || authUser.email || 'Usuário',
+    role: profile.role === 'admin' ? 'admin' : 'staff',
+  };
+}
+
+export async function authorize(): Promise<AuthorizedUser | null> {
+  const { authUser, profile } = await getSessionIdentity();
+  if (!authUser || !profile?.can_access) return null;
+  return authorizedUser(authUser, profile);
 }
 
 export async function writeAudit(
@@ -98,74 +107,41 @@ export async function writeAudit(
   description: string,
   metadata: Record<string, unknown> = {},
 ) {
-  await env.DB.prepare(`INSERT INTO audit_logs (
-    id, actor_user_id, actor_email, actor_name, action, entity_type, entity_id,
-    description, metadata, created_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(
-      crypto.randomUUID(), user.id, user.email, user.name, action, entityType,
-      entityId, description, JSON.stringify(metadata), new Date().toISOString(),
-    )
-    .run();
+  const admin = createSupabaseAdmin();
+  const { error } = await admin.from('audit_logs').insert({
+    actor_user_id: user.id,
+    actor_email: user.email,
+    actor_name: user.name,
+    action,
+    entity_type: entityType,
+    entity_id: entityId,
+    description,
+    metadata,
+  });
+  if (error) throw error;
 }
 
-export async function authorize(request: Request): Promise<AuthorizedUser | null> {
-  await ensureSecuritySchema();
-  const identity = getIdentity(request);
-  if (!identity) return null;
-
-  let row = await env.DB.prepare(
-    'SELECT * FROM app_users WHERE chatgpt_user_id = ? AND active = 1 LIMIT 1',
-  ).bind(identity.userId).first<UserRow>();
-
-  if (!row) {
-    row = await env.DB.prepare(
-      'SELECT * FROM app_users WHERE lower(email) = ? AND active = 1 LIMIT 1',
-    ).bind(identity.email).first<UserRow>();
-    if (row && !row.chatgpt_user_id) {
-      await env.DB.prepare('UPDATE app_users SET chatgpt_user_id = ?, name = CASE WHEN name = \'\' THEN ? ELSE name END WHERE id = ?')
-        .bind(identity.userId, identity.name, row.id)
-        .run();
-    }
-  }
-
-  if (!row) return null;
-
-  const user: AuthorizedUser = {
-    id: row.id,
-    userId: identity.userId,
-    email: row.email,
-    name: row.name || identity.name || row.email,
-    role: row.role === 'admin' ? 'admin' : 'staff',
-  };
-
-  const today = new Date().toISOString().slice(0, 10);
-  if (!row.last_login_at || row.last_login_at.slice(0, 10) !== today) {
-    await env.DB.prepare('UPDATE app_users SET last_login_at = ? WHERE id = ?')
-      .bind(new Date().toISOString(), row.id)
-      .run();
-    await writeAudit(user, 'login', 'session', row.id, 'Entrou no sistema');
-  }
-
-  return user;
-}
-
-export async function requireAuthorized(request: Request) {
-  const identity = getIdentity(request);
-  if (!identity) {
-    return { user: null, response: Response.json({ error: 'signed_out' }, { status: 401 }) };
-  }
-  const user = await authorize(request);
-  if (!user) {
+export async function requireAuthorized(_request?: Request) {
+  if (!isSupabaseConfigured()) {
     return {
       user: null,
-      response: Response.json({ error: 'access_denied', email: identity.email }, { status: 403 }),
+      response: Response.json({ error: 'supabase_not_configured' }, { status: 503 }),
     };
   }
-  return { user, response: null };
+  const { authUser, profile } = await getSessionIdentity();
+  if (!authUser) {
+    return { user: null, response: Response.json({ error: 'signed_out' }, { status: 401 }) };
+  }
+  if (!profile?.can_access) {
+    return {
+      user: null,
+      response: Response.json({ error: 'access_denied', email: authUser.email ?? '' }, { status: 403 }),
+    };
+  }
+  return { user: authorizedUser(authUser, profile), response: null };
 }
 
-export async function requireAdmin(request: Request) {
+export async function requireAdmin(request?: Request) {
   const result = await requireAuthorized(request);
   if (result.response || !result.user) return result;
   if (result.user.role !== 'admin') {

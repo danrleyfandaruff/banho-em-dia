@@ -1,6 +1,6 @@
-import { env } from 'cloudflare:workers';
 import { requireAdmin, requireAuthorized, writeAudit } from '@/lib/auth';
 import { getCardRates } from '@/lib/payment-rates';
+import { createSupabaseAdmin } from '@/lib/supabase';
 
 export async function GET(request: Request) {
   const auth = await requireAuthorized(request);
@@ -13,17 +13,28 @@ export async function PUT(request: Request) {
   if (auth.response || !auth.user) return auth.response;
   const body = await request.json() as { credit?: unknown; debit?: unknown };
   const { credit, debit } = body;
-  if (typeof credit !== 'number' || typeof debit !== 'number' ||
-      !Number.isInteger(credit) || !Number.isInteger(debit) ||
-      credit < 0 || debit < 0 || credit >= 10_000 || debit >= 10_000) {
+  if (typeof credit !== 'number' || typeof debit !== 'number'
+    || !Number.isInteger(credit) || !Number.isInteger(debit)
+    || credit < 0 || debit < 0 || credit >= 10_000 || debit >= 10_000) {
     return Response.json({ error: 'invalid_rates' }, { status: 400 });
   }
   const previous = await getCardRates();
-  await env.DB.prepare(`INSERT INTO payment_settings (id, credit_bps, debit_bps) VALUES (?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET credit_bps = excluded.credit_bps, debit_bps = excluded.debit_bps`)
-    .bind('stone', credit, debit).run();
-  await writeAudit(auth.user, 'payment_rates_updated', 'payment_settings', 'stone',
+  const admin = createSupabaseAdmin();
+  const { error } = await admin.from('payment_settings').upsert({
+    id: 'stone',
+    credit_bps: credit,
+    debit_bps: debit,
+    updated_at: new Date().toISOString(),
+    updated_by: auth.user.id,
+  });
+  if (error) throw error;
+  await writeAudit(
+    auth.user,
+    'payment_rates_updated',
+    'payment_settings',
+    'stone',
     `Alterou as taxas Stone: crédito ${(credit / 100).toLocaleString('pt-BR')}% e débito ${(debit / 100).toLocaleString('pt-BR')}%`,
-    { previous, rates: { credit, debit } });
+    { previous, rates: { credit, debit } },
+  );
   return Response.json({ rates: { credit, debit } });
 }

@@ -1,26 +1,18 @@
-import { env } from 'cloudflare:workers';
 import { requireAdmin } from '@/lib/auth';
-
-type AuditRow = {
-  id: string;
-  actor_email: string;
-  actor_name: string;
-  action: string;
-  entity_type: string;
-  entity_id: string;
-  description: string;
-  created_at: string;
-};
+import { createSupabaseAdmin } from '@/lib/supabase';
 
 export async function GET(request: Request) {
   const auth = await requireAdmin(request);
   if (auth.response) return auth.response;
-  const results = await env.DB.prepare(`SELECT
-    id, actor_email, actor_name, action, entity_type, entity_id, description, created_at
-    FROM audit_logs ORDER BY created_at DESC LIMIT 150`)
-    .all<AuditRow>();
+  const admin = createSupabaseAdmin();
+  const { data, error } = await admin
+    .from('audit_logs')
+    .select('id,actor_email,actor_name,action,entity_type,entity_id,description,created_at')
+    .order('created_at', { ascending: false })
+    .limit(150);
+  if (error) throw error;
   return Response.json({
-    logs: results.results.map((row) => ({
+    logs: (data ?? []).map((row) => ({
       id: row.id,
       actorEmail: row.actor_email,
       actorName: row.actor_name,

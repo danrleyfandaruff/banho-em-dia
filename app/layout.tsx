@@ -8,7 +8,11 @@ const manrope = Manrope({
   subsets: ['latin'],
 });
 
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL
+  ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
+
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
   title: 'HEIN PET SALON · Agenda de banho e tosa',
   description: 'Agenda simples para planos e atendimentos de banho e tosa.',
   manifest: '/manifest.webmanifest',
@@ -24,13 +28,13 @@ export const metadata: Metadata = {
   openGraph: {
     title: 'HEIN PET SALON',
     description: 'Agenda simples para banho e tosa.',
-    images: ['https://banho-em-dia.programador-vff.chatgpt.site/og.png'],
+    images: ['/og.png'],
   },
   twitter: {
     card: 'summary_large_image',
     title: 'HEIN PET SALON',
     description: 'Agenda simples para banho e tosa.',
-    images: ['https://banho-em-dia.programador-vff.chatgpt.site/og.png'],
+    images: ['/og.png'],
   },
 };
 
