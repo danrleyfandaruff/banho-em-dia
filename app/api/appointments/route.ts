@@ -55,6 +55,7 @@ type PetRow = {
   id: string;
   client_id: string;
   name: string;
+  notes: string;
   favorite_services: string[] | string;
   last_time: string | null;
   last_amount_cents: number | null;
@@ -129,6 +130,7 @@ async function syncClientPet(input: {
   favoriteServices: string[];
   lastTime: string;
   lastAmountCents: number | null;
+  notes?: string;
 }) {
   if (![input.ownerName, input.dogName, input.whatsapp, input.cpf].some((value) => value.trim())) {
     return { clientId: null, petId: null };
@@ -176,6 +178,7 @@ async function syncClientPet(input: {
   const petValues = {
     client_id: clientId,
     name: input.dogName.trim(),
+    ...(input.notes !== undefined ? { notes: input.notes } : {}),
     favorite_services: input.favoriteServices,
     last_time: input.lastTime || null,
     last_amount_cents: input.lastAmountCents,
@@ -220,7 +223,7 @@ async function listPetProfiles() {
   const admin = createSupabaseAdmin();
   const [clientsResult, petsResult] = await Promise.all([
     admin.from('clients').select('id,owner_name,whatsapp,cpf').returns<ClientRow[]>(),
-    admin.from('pets').select('id,client_id,name,favorite_services,last_time,last_amount_cents').returns<PetRow[]>(),
+    admin.from('pets').select('id,client_id,name,notes,favorite_services,last_time,last_amount_cents').returns<PetRow[]>(),
   ]);
   if (clientsResult.error || petsResult.error) {
     const message = `${clientsResult.error?.message ?? ''} ${petsResult.error?.message ?? ''}`.toLowerCase();
@@ -236,6 +239,7 @@ async function listPetProfiles() {
       petId: pet.id,
       ownerName: client?.owner_name ?? '',
       dogName: pet.name,
+      notes: pet.notes || '',
       whatsapp: client?.whatsapp ?? '',
       cpf: client?.cpf ?? '',
       favoriteServices: parseServices(pet.favorite_services),
@@ -311,6 +315,36 @@ export async function POST(request: Request) {
   const body = await request.json() as Record<string, unknown>;
   const action = String(body.action ?? 'create');
   const admin = createSupabaseAdmin();
+
+  if (action === 'pet_notes') {
+    const ownerName = String(body.ownerName ?? '');
+    const dogName = String(body.dogName ?? '');
+    const whatsapp = String(body.whatsapp ?? '');
+    const cpf = String(body.cpf ?? '');
+    const notes = String(body.notes ?? '');
+    if (!dogName.trim()) return Response.json({ error: 'pet_name_required' }, { status: 400 });
+    const contact = await syncClientPetSafely({
+      clientId: typeof body.clientId === 'string' ? body.clientId : null,
+      petId: typeof body.petId === 'string' ? body.petId : null,
+      ownerName,
+      dogName,
+      whatsapp,
+      cpf,
+      favoriteServices: Array.isArray(body.favoriteServices) ? body.favoriteServices.map(String) : ['Banho'],
+      lastTime: String(body.lastTime ?? '09:00'),
+      lastAmountCents: body.lastAmountCents === null || body.lastAmountCents === undefined ? null : Number(body.lastAmountCents),
+      notes,
+    });
+    if (!contact.petId) return Response.json({ error: 'pet_profile_unavailable' }, { status: 409 });
+    let linkQuery = admin.from('appointments').update({ client_id: contact.clientId, pet_id: contact.petId });
+    if (dogName.trim()) linkQuery = linkQuery.ilike('dog_name', dogName.trim());
+    if (ownerName.trim()) linkQuery = linkQuery.ilike('owner_name', ownerName.trim());
+    const linked = await linkQuery;
+    assertNoError(linked.error);
+    await writeAudit(auth.user, 'pet_notes_updated', 'pet', contact.petId,
+      `Atualizou as observações de ${dogName || ownerName || 'pet sem nome'}`,
+      { notesLength: notes.length });
+  }
 
   if (action === 'create') {
     const planType = String(body.planType ?? 'monthly') as Appointment['planType'];

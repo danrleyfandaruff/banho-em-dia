@@ -92,6 +92,7 @@ type PetProfile = {
   favoriteServices: string[];
   lastTime: string;
   lastAmountCents: number | null;
+  notes: string;
 };
 
 const serviceOptions = [
@@ -261,8 +262,14 @@ export default function Home() {
   const [duplicateOpen, setDuplicateOpen] = useState(false);
   const [whatsappOpen, setWhatsappOpen] = useState(false);
   const [whatsappTarget, setWhatsappTarget] = useState<Appointment | null>(null);
-  const [whatsappTemplate, setWhatsappTemplate] = useState<'confirm' | 'ready' | 'payment' | 'renew'>('confirm');
+  const [whatsappTemplate, setWhatsappTemplate] = useState<'confirm' | 'ready' | 'payment' | 'renew' | 'return'>('confirm');
   const [whatsappMessage, setWhatsappMessage] = useState('');
+  const [petHistoryOpen, setPetHistoryOpen] = useState(false);
+  const [petHistoryProfile, setPetHistoryProfile] = useState<PetProfile | null>(null);
+  const [petNotesDraft, setPetNotesDraft] = useState('');
+  const [petNotesSaving, setPetNotesSaving] = useState(false);
+  const [inactiveOpen, setInactiveOpen] = useState(false);
+  const [inactiveDays, setInactiveDays] = useState<30 | 45 | 60>(30);
   const [savingForm, setSavingForm] = useState('');
   const mutationQueue = useRef<Promise<unknown>>(Promise.resolve());
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -354,7 +361,7 @@ export default function Home() {
   }, [appointments]);
 
   const petProfiles = useMemo(() => {
-    const profiles = new Map(savedPetProfiles.map((profile) => [profile.key, { ...profile, favoriteServices: [...profile.favoriteServices] }]));
+    const profiles = new Map(savedPetProfiles.map((profile) => [profile.key, { ...profile, notes: profile.notes ?? '', favoriteServices: [...profile.favoriteServices] }]));
     [...appointments].reverse().forEach((item) => {
       const fallbackKey = [normalizeSearch(item.dogName), normalizeSearch(item.ownerName), item.whatsapp.replace(/\D/g, ''), item.cpf.replace(/\D/g, '')].join('|');
       const key = item.petId || fallbackKey;
@@ -375,6 +382,7 @@ export default function Home() {
         favoriteServices: item.services,
         lastTime: item.scheduledTime || '09:00',
         lastAmountCents: item.paymentDetails?.baseCents ?? item.amountCents,
+        notes: '',
       });
     });
     return [...profiles.values()]
@@ -418,6 +426,29 @@ export default function Home() {
       return !owner || normalizeSearch(item.ownerName) === owner || Boolean(whatsapp && item.whatsapp.replace(/\D/g, '') === whatsapp);
     });
   }, [appointments, form]);
+
+  const inactivePets = useMemo(() => petProfiles.flatMap((profile) => {
+    const history = appointments.filter((item) => {
+      if (profile.petId && item.petId) return profile.petId === item.petId;
+      return normalizeSearch(profile.dogName) === normalizeSearch(item.dogName)
+        && (!profile.ownerName || normalizeSearch(profile.ownerName) === normalizeSearch(item.ownerName));
+    });
+    if (history.some((item) => item.status === 'scheduled' && item.scheduledDate >= today)) return [];
+    const previous = history
+      .filter((item) => item.scheduledDate < today)
+      .sort((a, b) => b.scheduledDate.localeCompare(a.scheduledDate));
+    const last = previous.find((item) => item.status === 'completed') ?? previous[0];
+    if (!last) return [];
+    const elapsed = Math.floor((new Date(`${today}T12:00:00Z`).getTime() - new Date(`${last.scheduledDate}T12:00:00Z`).getTime()) / 86_400_000);
+    return elapsed >= inactiveDays ? [{ profile, days: elapsed, lastDate: last.scheduledDate }] : [];
+  }).sort((a, b) => b.days - a.days), [appointments, inactiveDays, petProfiles, today]);
+
+  const petHistoryAppointments = petHistoryProfile
+    ? appointments.filter((item) => appointmentBelongsToProfile(item, petHistoryProfile)).sort((a, b) => `${b.scheduledDate}${b.scheduledTime}`.localeCompare(`${a.scheduledDate}${a.scheduledTime}`))
+    : [];
+  const selectedFormProfile = petProfiles.find((profile) => form.petId && profile.petId === form.petId)
+    ?? petProfiles.find((profile) => petSearch && form.dogName && normalizeSearch(profile.dogName) === normalizeSearch(form.dogName)
+      && (!form.ownerName || normalizeSearch(profile.ownerName) === normalizeSearch(form.ownerName)));
 
   const todayAppointments = appointments.filter((item) => item.scheduledDate === today);
   const dailyAppointments = appointments.filter((item) => item.scheduledDate === dailyAgendaDate);
@@ -479,6 +510,8 @@ export default function Home() {
             : data.error === 'batch_amount_required' ? `Cadastre o valor antes de receber junto: ${(data.missing ?? []).join(', ')}.`
             : data.error === 'batch_already_paid' ? 'Um dos planos selecionados já foi pago. Atualize a agenda e tente novamente.'
             : data.error === 'invalid_batch_selection' ? 'Selecione pelo menos dois planos ainda não pagos.'
+            : data.error === 'pet_profile_unavailable' ? 'Execute a migração de clientes e pets no Supabase antes de salvar observações.'
+            : data.error === 'pet_name_required' ? 'Informe o nome do pet antes de salvar observações.'
             : data.error === 'invalid_amount' ? 'Informe um valor válido.'
             : 'Não foi possível salvar. Tente novamente.';
         setNotice(blockerMessage);
@@ -602,6 +635,7 @@ export default function Home() {
     if (template === 'ready') return `${greeting} O ${pet} já está pronto e pode ser buscado no HEIN PET SALON. 🐾`;
     if (template === 'payment') return `${greeting} O pagamento ${item.planType === 'single' ? 'do banho' : 'do plano'} do ${pet} está pendente. Se precisar, posso enviar os dados para pagamento.`;
     if (template === 'renew') return `${greeting} O plano de banhos do ${pet} terminou. Gostaria de renovar e já escolher as próximas datas? 🐶`;
+    if (template === 'return') return `${greeting} Faz um tempinho que não vemos o ${pet} por aqui. Gostaria de agendar um novo banho no HEIN PET SALON? 🐾`;
     return `${greeting} Passando para confirmar o banho do ${pet} no dia ${prettyDate(item.scheduledDate)} às ${item.scheduledTime}. 🐾`;
   }
 
@@ -610,11 +644,59 @@ export default function Home() {
     if (item) setWhatsappMessage(whatsappText(item, template));
   }
 
-  function openWhatsapp(item: Appointment) {
+  function openWhatsapp(item: Appointment, template: typeof whatsappTemplate = 'confirm') {
     setWhatsappTarget(item);
-    setWhatsappTemplate('confirm');
-    setWhatsappMessage(whatsappText(item, 'confirm'));
+    setWhatsappTemplate(template);
+    setWhatsappMessage(whatsappText(item, template));
     setWhatsappOpen(true);
+  }
+
+  function profileForAppointment(item: Appointment) {
+    return petProfiles.find((profile) => profile.petId && item.petId && profile.petId === item.petId)
+      ?? petProfiles.find((profile) => normalizeSearch(profile.dogName) === normalizeSearch(item.dogName)
+        && (!profile.ownerName || normalizeSearch(profile.ownerName) === normalizeSearch(item.ownerName)));
+  }
+
+  function appointmentBelongsToProfile(item: Appointment, profile: PetProfile) {
+    if (profile.petId && item.petId) return profile.petId === item.petId;
+    if (normalizeSearch(profile.dogName) !== normalizeSearch(item.dogName)) return false;
+    const sameOwner = !profile.ownerName || normalizeSearch(profile.ownerName) === normalizeSearch(item.ownerName);
+    const profilePhone = profile.whatsapp.replace(/\D/g, '');
+    return sameOwner || Boolean(profilePhone && profilePhone === item.whatsapp.replace(/\D/g, ''));
+  }
+
+  function openPetHistory(profileOrAppointment: PetProfile | Appointment) {
+    const profile = 'favoriteServices' in profileOrAppointment
+      ? profileOrAppointment
+      : profileForAppointment(profileOrAppointment) ?? {
+        key: profileOrAppointment.petId || profileOrAppointment.id,
+        clientId: profileOrAppointment.clientId,
+        petId: profileOrAppointment.petId,
+        ownerName: profileOrAppointment.ownerName,
+        dogName: profileOrAppointment.dogName,
+        whatsapp: profileOrAppointment.whatsapp,
+        cpf: profileOrAppointment.cpf,
+        favoriteServices: profileOrAppointment.services,
+        lastTime: profileOrAppointment.scheduledTime,
+        lastAmountCents: profileOrAppointment.paymentDetails?.baseCents ?? profileOrAppointment.amountCents,
+        notes: '',
+      };
+    setPetHistoryProfile(profile);
+    setPetNotesDraft(profile.notes || '');
+    setInactiveOpen(false);
+    setPetHistoryOpen(true);
+  }
+
+  async function savePetNotes() {
+    if (!petHistoryProfile || petNotesSaving) return;
+    setPetNotesSaving(true);
+    const ok = await mutate({
+      action: 'pet_notes',
+      ...petHistoryProfile,
+      notes: petNotesDraft,
+    }, 'Observações do pet atualizadas');
+    setPetNotesSaving(false);
+    if (ok) setPetHistoryProfile({ ...petHistoryProfile, notes: petNotesDraft });
   }
 
   function openEdit(item: Appointment) {
@@ -1290,6 +1372,7 @@ export default function Home() {
                                   {item.paymentMethod && <button type="button" onClick={() => editPaymentMethod(item)} title="Alterar forma de pagamento" className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#7353a6] hover:underline disabled:opacity-50"><CreditCard size={12} /> {paymentMethodLabel(item.paymentMethod)}</button>}
                                 </div>
                                 <p className="flex flex-wrap items-center gap-x-1.5 text-sm text-[#7d7087]"><Scissors size={14} /> {item.services.length ? item.services.join(' · ') : 'Sem serviços definidos'}</p>
+                                {profileForAppointment(item)?.notes && <p className="mt-1.5 line-clamp-2 rounded-lg bg-[#fff4dc] px-2.5 py-1.5 text-[11px] font-semibold text-[#80591d]">Obs.: {profileForAppointment(item)?.notes}</p>}
                                 {item.planType !== 'single' && <p className="mt-1.5 text-[11px] font-semibold text-[#92849c]">{stats.completed} concluídas · {stats.absent} faltas</p>}
                                 <PaidTotal item={item} />
                               </div>
@@ -1300,6 +1383,7 @@ export default function Home() {
                                   <span className="ml-1 text-xs font-semibold text-[#92849c] sm:hidden">Mover dia</span>
                                 </div>
                                 {item.planType !== 'single' && <Button variant="outline" onClick={() => openPlan(item)} className="h-11 w-full px-2.5 text-xs font-bold text-[#7353a6] sm:h-9 sm:w-auto"><ListChecks /> Ver plano</Button>}
+                                <Button variant="outline" onClick={() => openPetHistory(item)} className="h-11 w-full px-2.5 text-xs font-bold text-[#7353a6] sm:h-9 sm:w-auto"><History /> Histórico</Button>
                                 <Button variant="outline" onClick={() => openDelete(item)} className="h-11 w-full border-[#ead0cc] px-2.5 text-xs font-bold text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f] sm:h-9 sm:w-auto"><Trash2 /> {item.planType === 'single' ? 'Apagar banho' : 'Apagar plano'}</Button>
                                 {isRenewable ? (
                                   <Button onClick={() => openRenew(item)} className="h-11 w-full bg-[#9b6bc2] px-3 text-xs font-bold text-white hover:bg-[#8254a8] sm:h-9 sm:w-auto"><RefreshCw /> Renovar</Button>
@@ -1360,6 +1444,15 @@ export default function Home() {
               </div>
             )}
           </div>
+
+          <div className="rounded-2xl border border-[#e4dced] bg-[#fffbff] p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div><p className="text-xs font-bold uppercase tracking-[0.12em] text-[#8b7c95]">Clientes para chamar</p><h3 className="mt-1 font-heading font-extrabold">Sem voltar há {inactiveDays}+ dias</h3></div>
+              <span className="grid h-8 min-w-8 place-items-center rounded-full bg-[#eee6f7] px-2 text-sm font-extrabold text-[#7353a6]">{inactivePets.length}</span>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-[#81748a]">Pets sem banho futuro agendado.</p>
+            <Button variant="outline" onClick={() => setInactiveOpen(true)} className="mt-4 w-full border-[#cdbce0] font-bold text-[#7353a6]"><Dog /> Ver clientes</Button>
+          </div>
         </aside>
       </div>
 
@@ -1403,10 +1496,12 @@ export default function Home() {
                     <span className={`rounded-full px-2.5 py-1 text-[11px] font-extrabold ${item.status === 'completed' ? 'bg-[#e8f4eb] text-[#4f765c]' : item.status === 'absent' ? 'bg-[#f7e7e2] text-[#ad533d]' : 'bg-[#f1edf5] text-[#776a80]'}`}>{statusLabels[item.status]}</span>
                   </div>
                   <p className="mt-3 flex flex-wrap items-center gap-x-1.5 text-xs text-[#7d7087]"><Scissors size={13} /> {item.services.length ? item.services.join(' · ') : 'Sem serviços definidos'}</p>
+                  {profileForAppointment(item)?.notes && <p className="mt-2 rounded-lg bg-[#fff4dc] px-2.5 py-1.5 text-xs font-semibold text-[#80591d]">Obs.: {profileForAppointment(item)?.notes}</p>}
                   <PaidTotal item={item} />
                   <div className="mt-3 grid grid-cols-2 gap-2 border-t border-[#eee8f3] pt-3 sm:flex sm:flex-wrap sm:items-center sm:gap-1.5">
                     {item.whatsapp && <button type="button" onClick={() => openWhatsapp(item)} className="flex h-11 items-center justify-center gap-2 rounded-lg bg-[#e6f7eb] px-3 text-xs font-bold text-[#1e8b4c] sm:grid sm:h-8 sm:w-8 sm:p-0" aria-label="Abrir WhatsApp"><MessageCircle size={16} /><span className="sm:hidden">WhatsApp</span></button>}
                     <Button variant="outline" size="sm" onClick={() => editFromOverview(item)} className="h-11 w-full sm:h-8 sm:w-auto"><Pencil /> Editar</Button>
+                    <Button variant="outline" size="sm" onClick={() => { setTodayOpen(false); openPetHistory(item); }} className="h-11 w-full text-[#7353a6] sm:h-8 sm:w-auto"><History /> Histórico</Button>
                     {item.planType !== 'single' && <Button variant="outline" size="sm" onClick={() => openPlanFromToday(item)} className="h-11 w-full text-[#7353a6] sm:h-8 sm:w-auto"><ListChecks /> Ver plano</Button>}
                     {item.status === 'scheduled' ? (
                       <>
@@ -1431,6 +1526,65 @@ export default function Home() {
           <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5">
             <Button variant="outline" onClick={() => setTodayOpen(false)}>Fechar</Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={inactiveOpen} onOpenChange={setInactiveOpen}>
+        <DialogContent className="mobile-sheet max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-4 sm:max-w-2xl sm:p-5">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><Dog className="text-[#7353a6]" /> Clientes que não voltaram</DialogTitle>
+            <DialogDescription>Pets sem atendimento futuro. Use a ficha ou o WhatsApp para retomar o contato.</DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-3 gap-2">
+            {([30, 45, 60] as const).map((daysAway) => <button key={daysAway} type="button" onClick={() => setInactiveDays(daysAway)} className={`h-10 rounded-xl border text-xs font-extrabold ${inactiveDays === daysAway ? 'border-[#7353a6] bg-[#eee6f7] text-[#7353a6]' : 'border-[#e4dced] bg-white text-[#6f6179]'}`}>{daysAway}+ dias</button>)}
+          </div>
+          <div className="space-y-2.5">
+            {inactivePets.length === 0 ? (
+              <p className="rounded-xl bg-[#f1ecf7] p-5 text-center text-sm font-semibold text-[#81748a]">Nenhum cliente nesta faixa.</p>
+            ) : inactivePets.map(({ profile, days: daysAway, lastDate }) => {
+              const recent = appointments.filter((item) => appointmentBelongsToProfile(item, profile)).sort((a, b) => b.scheduledDate.localeCompare(a.scheduledDate))[0];
+              return <article key={profile.key} className="rounded-2xl border border-[#e4dced] bg-white p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div><p className="font-heading font-extrabold">{profile.dogName || 'Pet sem nome'}</p><p className="text-xs text-[#81748a]">{profile.ownerName || 'Dono não informado'} · último atendimento em {prettyDate(lastDate)}</p></div>
+                  <span className="rounded-full bg-[#f7eee9] px-2.5 py-1 text-xs font-extrabold text-[#99583f]">{daysAway} dias</span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" onClick={() => openPetHistory(profile)} className="text-[#7353a6]"><History /> Ver histórico</Button>
+                  {recent?.whatsapp && <Button variant="outline" size="sm" onClick={() => { setInactiveOpen(false); openWhatsapp(recent, 'return'); }} className="text-[#1e8b4c]"><MessageCircle /> Chamar no WhatsApp</Button>}
+                </div>
+              </article>;
+            })}
+          </div>
+          <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5"><Button variant="outline" onClick={() => setInactiveOpen(false)}>Fechar</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={petHistoryOpen} onOpenChange={setPetHistoryOpen}>
+        <DialogContent className="mobile-sheet max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-4 sm:max-w-3xl sm:p-5">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><History className="text-[#7353a6]" /> Histórico de {petHistoryProfile?.dogName || 'pet'}</DialogTitle>
+            <DialogDescription>{petHistoryProfile?.ownerName || 'Dono não informado'}{petHistoryProfile?.whatsapp ? ` · ${petHistoryProfile.whatsapp}` : ''} · {petHistoryAppointments.length} {petHistoryAppointments.length === 1 ? 'atendimento' : 'atendimentos'}</DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-3 gap-2">
+            <div className="rounded-xl bg-[#f1edf5] p-3 text-center"><strong className="font-heading text-2xl text-[#7353a6]">{petHistoryAppointments.length}</strong><span className="block text-[10px] font-bold text-[#81748a]">total</span></div>
+            <div className="rounded-xl bg-[#e8f4eb] p-3 text-center"><strong className="font-heading text-2xl text-[#4f765c]">{petHistoryAppointments.filter((item) => item.status === 'completed').length}</strong><span className="block text-[10px] font-bold text-[#678471]">concluídos</span></div>
+            <div className="rounded-xl bg-[#f7e7e2] p-3 text-center"><strong className="font-heading text-2xl text-[#ad533d]">{petHistoryAppointments.filter((item) => item.status === 'absent').length}</strong><span className="block text-[10px] font-bold text-[#956c61]">faltas</span></div>
+          </div>
+          <div className="rounded-2xl border border-[#e5d9bd] bg-[#fff9eb] p-4">
+            <label className="block"><span className="mb-1.5 block text-xs font-extrabold text-[#755624]">Observações permanentes do pet</span><textarea value={petNotesDraft} onChange={(event) => setPetNotesDraft(event.target.value)} rows={3} placeholder="Alergias, comportamento, shampoo específico, cuidados especiais..." className="w-full resize-y rounded-xl border border-[#e6d7b5] bg-white p-3 text-sm leading-6 outline-none focus:ring-2 focus:ring-[#c69a45]/25" /></label>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2"><small className="text-xs text-[#806b49]">Essas observações aparecem no cadastro e nos cards da agenda.</small><Button size="sm" disabled={petNotesSaving} onClick={savePetNotes}>{petNotesSaving ? <LoaderCircle className="animate-spin" /> : <Check />} Salvar observações</Button></div>
+          </div>
+          {petHistoryProfile?.favoriteServices.length ? <p className="rounded-xl bg-[#f1ecf7] px-3 py-2 text-xs font-semibold text-[#6f6179]"><Scissors className="mr-1 inline" size={13} /> Serviços favoritos: {petHistoryProfile.favoriteServices.join(' · ')}</p> : null}
+          <div className="space-y-2.5">
+            {petHistoryAppointments.length === 0 ? <p className="rounded-xl bg-[#f1ecf7] p-5 text-center text-sm font-semibold text-[#81748a]">Nenhum atendimento encontrado para este pet.</p> : petHistoryAppointments.map((item) => (
+              <article key={`history-${item.id}`} className={`rounded-2xl border p-3.5 ${cardColors[item.status]}`}>
+                <div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-extrabold capitalize">{prettyDate(item.scheduledDate)} · {item.scheduledTime}</p><p className="mt-1 text-xs text-[#81748a]">{planLabels[item.planType]} · sessão {item.sessionNumber} de {item.totalSessions}</p></div><span className={`appointment-status ${cardColors[item.status]}`}>{statusLabels[item.status]}</span></div>
+                <p className="mt-2 text-xs text-[#6f6179]"><Scissors className="mr-1 inline" size={13} /> {item.services.length ? item.services.join(' · ') : 'Sem serviços definidos'}</p>
+                <p className="mt-1 text-xs font-semibold text-[#81748a]">{item.paid ? `Pago${item.paymentMethod ? ` · ${paymentMethodLabel(item.paymentMethod)}` : ''}` : 'Pagamento pendente'}{formatMoney(item.amountCents) ? ` · ${formatMoney(item.amountCents)}` : ''}</p>
+              </article>
+            ))}
+          </div>
+          <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5"><Button variant="outline" onClick={() => setPetHistoryOpen(false)}>Fechar</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -1459,6 +1613,7 @@ export default function Home() {
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2 border-t border-[#e5dced] pt-3 sm:flex sm:flex-wrap sm:items-center">
                 {selectedPlanHead.whatsapp && <button type="button" onClick={() => openWhatsapp(selectedPlanHead)} className="flex h-11 items-center justify-center gap-2 rounded-lg bg-[#e6f7eb] px-3 text-xs font-bold text-[#1e8b4c] sm:grid sm:h-9 sm:w-9 sm:p-0" aria-label="Abrir WhatsApp"><MessageCircle size={17} /><span className="sm:hidden">WhatsApp</span></button>}
+                <Button variant="outline" onClick={() => { setPlanOpen(false); openPetHistory(selectedPlanHead); }} className="h-11 text-[#7353a6] sm:h-9"><History /> Histórico do pet</Button>
                 <Button
 
                   variant="outline"
@@ -1721,6 +1876,7 @@ export default function Home() {
               ['ready', 'Pet pronto'],
               ['payment', 'Lembrar pagamento'],
               ['renew', 'Oferecer renovação'],
+              ['return', 'Convidar para voltar'],
             ] as const).map(([value, label]) => (
               <button key={value} type="button" onClick={() => chooseWhatsappTemplate(value)} className={`min-h-11 rounded-xl border px-3 py-2 text-left text-xs font-extrabold transition ${whatsappTemplate === value ? 'border-[#1e8b4c] bg-[#e6f7eb] text-[#176d3c]' : 'border-[#e4dced] bg-white text-[#66576f] hover:bg-[#f7f3fb]'}`}>{label}</button>
             ))}
@@ -1770,6 +1926,7 @@ export default function Home() {
               {(form.petId || form.clientId || (petSearch && form.dogName))
                 ? <p className="mt-2 text-xs font-semibold text-[#7353a6]">Dados, horário, valor e serviços favoritos preenchidos automaticamente. Você pode alterar tudo abaixo.</p>
                 : <p className="mt-2 text-[11px] text-[#897a93]">Não encontrou? Preencha abaixo e o cliente ficará disponível nos próximos agendamentos.</p>}
+              {selectedFormProfile?.notes && <p className="mt-2 rounded-lg bg-[#fff4dc] px-3 py-2 text-xs font-semibold leading-5 text-[#80591d]"><strong>Observações do pet:</strong> {selectedFormProfile.notes}</p>}
             </div>
             <div className="grid gap-3 sm:grid-cols-3">
               <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><UserRound size={14} /> Nome do dono</span><Input value={form.ownerName} onChange={(event) => setForm({ ...form, ownerName: event.target.value })} placeholder="Ex.: Ana" className="h-11 bg-white" /></label>

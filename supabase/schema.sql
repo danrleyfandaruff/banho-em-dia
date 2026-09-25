@@ -38,6 +38,7 @@ create table if not exists public.pets (
   id uuid primary key default gen_random_uuid(),
   client_id uuid not null references public.clients(id) on delete cascade,
   name text not null default '',
+  notes text not null default '',
   favorite_services jsonb not null default '[]'::jsonb,
   last_time time,
   last_amount_cents integer check (last_amount_cents is null or last_amount_cents >= 0),

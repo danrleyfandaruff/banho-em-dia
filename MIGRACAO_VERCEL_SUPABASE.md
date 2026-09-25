@@ -58,4 +58,7 @@ O arquivo SQL cria a estrutura vazia. Os registros do banco antigo não são cop
 
 ## Atualização de uma instalação existente
 
-Se você já executou o `schema.sql` antes da inclusão do cadastro rápido, execute também [`supabase/migrations/20260925_quick_registration.sql`](supabase/migrations/20260925_quick_registration.sql) no SQL Editor.
+Se você já executou o `schema.sql` antes da inclusão do cadastro rápido, execute também, nesta ordem:
+
+1. [`supabase/migrations/20260925_quick_registration.sql`](supabase/migrations/20260925_quick_registration.sql)
+2. [`supabase/migrations/20260925_pet_history.sql`](supabase/migrations/20260925_pet_history.sql)
