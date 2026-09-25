@@ -264,6 +264,10 @@ export default function Home() {
   const [editingOriginalDate, setEditingOriginalDate] = useState('');
   const [editDateChoiceOpen, setEditDateChoiceOpen] = useState(false);
   const [pendingMove, setPendingMove] = useState<{ item: Appointment; scheduledDate: string } | null>(null);
+  const [renewOpen, setRenewOpen] = useState(false);
+  const [renewTarget, setRenewTarget] = useState<Appointment | null>(null);
+  const [renewDates, setRenewDates] = useState<string[]>([]);
+  const [renewedWarning, setRenewedWarning] = useState<{ name: string; renewedAt: string | null } | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(() => localDateString().slice(0, 7));
   const [notice, setNotice] = useState('');
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -370,6 +374,7 @@ export default function Home() {
           ? `Não é possível apagar: ${data.blockers.join(' e ')}.`
           : data.error === 'plan_incomplete'
             ? `Ainda ${data.pendingCount === 1 ? 'existe 1 banho em aberto' : `existem ${data.pendingCount} banhos em aberto`}. Finalize todas as sessões antes de renovar.`
+            : data.error === 'plan_already_renewed' ? 'Este plano já foi renovado. A renovação existente foi mantida.'
             : data.error === 'rates_changed' ? 'As taxas foram atualizadas. Confira o novo total e confirme novamente.'
             : data.error === 'card_amount_required' ? 'Informe o valor do banho ou plano para calcular a taxa do cartão.'
             : data.error === 'batch_amount_required' ? `Cadastre o valor antes de receber junto: ${(data.missing ?? []).join(', ')}.`
@@ -509,6 +514,60 @@ export default function Home() {
   function changeDailyAgendaDate(date: string) {
     setDailyAgendaDate(date);
     setSelectedIds([]);
+  }
+
+  async function openRenew(item: Appointment) {
+    try {
+      const response = await fetch('/api/appointments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'renew_info', groupId: item.groupId }),
+      });
+      const data = await response.json() as {
+        alreadyRenewed?: boolean;
+        renewedAt?: string | null;
+        dogName?: string;
+        sessionDates?: string[];
+        error?: string;
+        pendingCount?: number;
+      };
+      if (!response.ok) {
+        const message = data.error === 'plan_incomplete'
+          ? `Ainda ${data.pendingCount === 1 ? 'existe 1 banho em aberto' : `existem ${data.pendingCount} banhos em aberto`}. Finalize todas as sessões antes de renovar.`
+          : 'Não foi possível conferir a renovação. Tente novamente.';
+        setNotice(message);
+        window.setTimeout(() => setNotice(''), 4200);
+        return;
+      }
+      if (data.alreadyRenewed) {
+        setRenewedWarning({ name: data.dogName || item.dogName || item.ownerName || 'este cliente', renewedAt: data.renewedAt ?? null });
+        return;
+      }
+      setRenewTarget(item);
+      setRenewDates(data.sessionDates ?? sessionDatesFor(item.planType, addDays(item.scheduledDate, intervalDaysFor(item.planType))));
+      setPlanOpen(false);
+      setPlanReturnToToday(false);
+      setSelectedPlanGroupId(null);
+      setRenewOpen(true);
+    } catch {
+      setNotice('A conexão falhou ao conferir a renovação. Tente novamente.');
+      window.setTimeout(() => setNotice(''), 4200);
+    }
+  }
+
+  async function confirmRenew() {
+    if (!renewTarget || savingForm || renewDates.some((date) => !date)) return;
+    setSavingForm('renew');
+    const ok = await mutate(
+      { action: 'renew', groupId: renewTarget.groupId, sessionDates: renewDates },
+      'Plano renovado com as datas escolhidas',
+    );
+    setSavingForm('');
+    if (ok) {
+      setRenewOpen(false);
+      setRenewTarget(null);
+      setRenewDates([]);
+    }
   }
 
   function updatePaid(item: Appointment) {
@@ -1010,7 +1069,7 @@ export default function Home() {
                                 {item.planType !== 'single' && <Button variant="outline" onClick={() => openPlan(item)} className="h-11 w-full px-2.5 text-xs font-bold text-[#7353a6] sm:h-9 sm:w-auto"><ListChecks /> Ver plano</Button>}
                                 <Button variant="outline" onClick={() => openDelete(item)} className="h-11 w-full border-[#ead0cc] px-2.5 text-xs font-bold text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f] sm:h-9 sm:w-auto"><Trash2 /> {item.planType === 'single' ? 'Apagar banho' : 'Apagar plano'}</Button>
                                 {isRenewable ? (
-                                  <Button onClick={() => mutate({ action: 'renew', groupId: item.groupId }, 'Plano renovado mantendo o mesmo dia')} className="h-11 w-full bg-[#9b6bc2] px-3 text-xs font-bold text-white hover:bg-[#8254a8] sm:h-9 sm:w-auto"><RefreshCw /> Renovar</Button>
+                                  <Button onClick={() => openRenew(item)} className="h-11 w-full bg-[#9b6bc2] px-3 text-xs font-bold text-white hover:bg-[#8254a8] sm:h-9 sm:w-auto"><RefreshCw /> Renovar</Button>
                                 ) : item.status === 'scheduled' ? (
                                   <>
                                     <Button variant="outline" onClick={() => mutate({ action: 'status', id: item.id, status: 'absent' }, 'Falta registrada')} className="h-11 w-full px-2.5 text-xs font-bold text-[#93503f] sm:h-9 sm:w-auto"><X /> Falta</Button>
@@ -1061,7 +1120,7 @@ export default function Home() {
                   </Button>
                 ))}
                 {renewalItems.slice(0, 3).map((item) => (
-                  <Button variant="ghost" key={`renew-${item.id}`} onClick={() => mutate({ action: 'renew', groupId: item.groupId }, 'Plano renovado mantendo o mesmo dia')} className="h-auto w-full flex-wrap justify-start whitespace-normal rounded-xl bg-[#f1ecf7] p-3 text-left transition hover:bg-[#e9e0f3] disabled:opacity-50">
+                  <Button variant="ghost" key={`renew-${item.id}`} onClick={() => openRenew(item)} className="h-auto w-full flex-wrap justify-start whitespace-normal rounded-xl bg-[#f1ecf7] p-3 text-left transition hover:bg-[#e9e0f3] disabled:opacity-50">
                     <p className="font-bold">{item.dogName || item.ownerName || 'Sem nome'} · última sessão</p><p className="mt-1 text-xs font-extrabold text-[#7353a6]">Renovar plano →</p>
                   </Button>
                 ))}
@@ -1235,15 +1294,7 @@ export default function Home() {
             <Button variant="outline" onClick={closePlan}>{planReturnToToday ? 'Voltar para atendimentos de hoje' : 'Fechar'}</Button>
             {selectedPlanIsRenewable && selectedPlanHead && (
               <Button
-
-                onClick={async () => {
-                  const ok = await mutate({ action: 'renew', groupId: selectedPlanHead.groupId }, 'Plano renovado mantendo o mesmo dia');
-                  if (ok) {
-                    setPlanOpen(false);
-                    setPlanReturnToToday(false);
-                    setSelectedPlanGroupId(null);
-                  }
-                }}
+                onClick={() => openRenew(selectedPlanHead)}
                 className="bg-[#9b6bc2] font-bold text-white hover:bg-[#8254a8]"
               >
                 <RefreshCw /> Renovar plano
@@ -1252,6 +1303,78 @@ export default function Home() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={renewOpen} onOpenChange={(open) => {
+        if (savingForm === 'renew') return;
+        setRenewOpen(open);
+        if (!open) {
+          setRenewTarget(null);
+          setRenewDates([]);
+        }
+      }}>
+        <DialogContent className="mobile-sheet max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-4 sm:max-w-lg sm:p-5">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><RefreshCw className="text-[#7353a6]" /> Renovar plano</DialogTitle>
+            <DialogDescription>
+              {renewTarget
+                ? `${renewTarget.dogName || renewTarget.ownerName || 'Cliente sem nome'} · novo plano ${planLabels[renewTarget.planType].toLowerCase()}`
+                : 'Escolha as datas do novo plano.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-xl border border-[#d9c5eb] bg-[#f3eafa] p-3 text-sm leading-6 text-[#6f6179]">
+            Confira as datas antes de renovar. A primeira mantém o intervalo do plano anterior, mas você pode ajustar cada sessão.
+          </div>
+          <div className="space-y-3">
+            {renewDates.map((date, index) => (
+              <label key={index} className="block rounded-xl border border-[#e4dced] bg-white p-3">
+                <span className="mb-1.5 flex items-center justify-between gap-2 text-xs font-bold text-[#6f6179]">
+                  <span>Sessão {index + 1}</span>
+                  <span className="font-semibold capitalize text-[#92849c]">{date ? prettyDate(date).split(',')[0] : ''}</span>
+                </span>
+                <Input
+                  type="date"
+                  value={date}
+                  disabled={savingForm === 'renew'}
+                  onChange={(event) => {
+                    if (!event.target.value || !renewTarget) return;
+                    if (index === 0) {
+                      setRenewDates(sessionDatesFor(renewTarget.planType, event.target.value));
+                      return;
+                    }
+                    const dates = [...renewDates];
+                    dates[index] = event.target.value;
+                    setRenewDates(dates);
+                  }}
+                  className="h-11 bg-[#fffbff]"
+                />
+              </label>
+            ))}
+          </div>
+          <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5">
+            <Button type="button" variant="outline" disabled={savingForm === 'renew'} onClick={() => {
+              setRenewOpen(false);
+              setRenewTarget(null);
+              setRenewDates([]);
+            }}>Cancelar</Button>
+            <Button type="button" disabled={savingForm === 'renew' || renewDates.some((date) => !date)} onClick={confirmRenew}><RefreshCw /> Confirmar renovação</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={Boolean(renewedWarning)} onOpenChange={(open) => { if (!open) setRenewedWarning(null); }}>
+        <AlertDialogContent className="mobile-alert max-w-[calc(100%-1.5rem)] border-0 bg-[#fffbff]">
+          <AlertDialogHeader>
+            <AlertDialogMedia className="bg-[#f3eafa] text-[#7353a6]"><RefreshCw /></AlertDialogMedia>
+            <AlertDialogTitle className="font-heading font-extrabold">Este plano já foi renovado</AlertDialogTitle>
+            <AlertDialogDescription>
+              O plano de {renewedWarning?.name} já possui uma renovação{renewedWarning?.renewedAt ? ` registrada em ${new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(renewedWarning.renewedAt))}` : ''}. Nenhum novo plano foi criado.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Entendi</AlertDialogCancel>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={calculatorOpen} onOpenChange={setCalculatorOpen}>
         <DialogContent className="mobile-sheet border-0 bg-[#fffbff] p-4 sm:max-w-md sm:p-5">

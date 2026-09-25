@@ -164,6 +164,17 @@ function appointmentName(row: Pick<AppointmentRow, 'dog_name' | 'owner_name' | '
   return row.dog_name || row.owner_name || row.customer_pet_name || 'agendamento sem nome';
 }
 
+async function findPlanRenewal(previousGroupId: string) {
+  return env.DB.prepare(
+    `SELECT entity_id AS renewal_group_id, created_at
+     FROM audit_logs
+     WHERE action = 'plan_renewed'
+       AND json_extract(metadata, '$.previousGroupId') = ?
+     ORDER BY created_at DESC
+     LIMIT 1`,
+  ).bind(previousGroupId).first<{ renewal_group_id: string; created_at: string }>();
+}
+
 export async function GET(request: Request) {
   const auth = await requireAuthorized(request);
   if (auth.response) return auth.response;
@@ -512,10 +523,11 @@ export async function POST(request: Request) {
     );
   }
 
-  if (action === 'renew') {
+  if (action === 'renew_info') {
+    const previousGroupId = String(body.groupId ?? '');
     const previousPlan = await db.prepare(
       'SELECT * FROM appointments WHERE group_id = ? ORDER BY session_number ASC',
-    ).bind(String(body.groupId ?? '')).all<AppointmentRow>();
+    ).bind(previousGroupId).all<AppointmentRow>();
     const previousSessions = previousPlan.results;
     const previous = previousSessions.at(-1);
     if (!previous) return Response.json({ error: 'not_found' }, { status: 404 });
@@ -526,9 +538,50 @@ export async function POST(request: Request) {
     if (pendingCount) {
       return Response.json({ error: 'plan_incomplete', pendingCount }, { status: 409 });
     }
+    const existingRenewal = await findPlanRenewal(previousGroupId);
     const totalSessions = previous.plan_type === 'monthly' ? 4 : 2;
     const intervalDays = previous.plan_type === 'monthly' ? 7 : 14;
     const nextStart = addDays(previous.scheduled_date, intervalDays);
+    return Response.json({
+      alreadyRenewed: Boolean(existingRenewal),
+      renewalGroupId: existingRenewal?.renewal_group_id ?? null,
+      renewedAt: existingRenewal?.created_at ?? null,
+      dogName: appointmentName(previous),
+      planType: previous.plan_type,
+      sessionDates: Array.from({ length: totalSessions }, (_, index) => addDays(nextStart, intervalDays * index)),
+    });
+  }
+
+  if (action === 'renew') {
+    const previousGroupId = String(body.groupId ?? '');
+    const previousPlan = await db.prepare(
+      'SELECT * FROM appointments WHERE group_id = ? ORDER BY session_number ASC',
+    ).bind(previousGroupId).all<AppointmentRow>();
+    const previousSessions = previousPlan.results;
+    const previous = previousSessions.at(-1);
+    if (!previous) return Response.json({ error: 'not_found' }, { status: 404 });
+    if (previous.plan_type === 'single') {
+      return Response.json({ error: 'single_cannot_renew' }, { status: 409 });
+    }
+    const pendingCount = previousSessions.filter((session) => session.status === 'scheduled').length;
+    if (pendingCount) {
+      return Response.json({ error: 'plan_incomplete', pendingCount }, { status: 409 });
+    }
+    const existingRenewal = await findPlanRenewal(previousGroupId);
+    if (existingRenewal) {
+      return Response.json({
+        error: 'plan_already_renewed',
+        renewalGroupId: existingRenewal.renewal_group_id,
+      }, { status: 409 });
+    }
+    const totalSessions = previous.plan_type === 'monthly' ? 4 : 2;
+    const intervalDays = previous.plan_type === 'monthly' ? 7 : 14;
+    const nextStart = addDays(previous.scheduled_date, intervalDays);
+    const requestedSessionDates = Array.isArray(body.sessionDates) ? body.sessionDates.map(String) : [];
+    const sessionDates = Array.from({ length: totalSessions }, (_, index) =>
+      /^\d{4}-\d{2}-\d{2}$/.test(requestedSessionDates[index] ?? '')
+        ? requestedSessionDates[index]
+        : addDays(nextStart, intervalDays * index));
     const groupId = crypto.randomUUID();
     const createdAt = new Date().toISOString();
     const renewalAmountCents = parsePaymentDetails(previous.payment_details)?.baseCents ?? previous.amount_cents;
@@ -542,14 +595,14 @@ export async function POST(request: Request) {
       ).bind(
         crypto.randomUUID(), groupId, previous.customer_pet_name, previous.owner_name, previous.dog_name,
         previous.whatsapp, previous.cpf, previous.payment_method, previous.plan_type,
-        renewalAmountCents, addDays(nextStart, intervalDays * index), previous.scheduled_time,
+        renewalAmountCents, sessionDates[index], previous.scheduled_time,
         previousSessions[index]?.services ?? previous.services, index + 1, totalSessions, createdAt,
       ),
     ));
     await writeAudit(
       auth.user, 'plan_renewed', 'appointment_group', groupId,
       `Renovou o plano de ${appointmentName(previous)}`,
-      { previousGroupId: previous.group_id, planType: previous.plan_type, totalSessions },
+      { previousGroupId: previous.group_id, planType: previous.plan_type, totalSessions, sessionDates },
     );
   }
 
