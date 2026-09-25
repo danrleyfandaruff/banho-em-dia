@@ -57,6 +57,11 @@ body {
   border-left: 2px solid #e5ddec;
   background: #fff;
 }
+.appointment-record {
+  border: 1px solid #d4cbdc;
+  border-radius: 0.875rem;
+  box-shadow: 0 2px 5px rgb(48 38 56 / 6%);
+}
 .appointment-open { --status-accent: #9861c4; --status-background: #faf5ff; --status-text: #6b368e; }
 .appointment-completed { --status-accent: #29986c; --status-background: #e5f5ec; --status-text: #1b6747; }
 .appointment-absent { --status-accent: #d27a4f; --status-background: #fff0e7; --status-text: #994821; }

@@ -495,7 +495,7 @@ export default function Home() {
     const notes = profileForAppointment(item)?.notes;
     const showPlan = () => fromOverview ? openPlanFromToday(item) : openPlan(item);
     const showHistory = () => { if (fromOverview) setTodayOpen(false); openPetHistory(item); };
-    return <div key={item.id} data-appointment-card className={`appointment-card relative grid gap-3 px-4 py-3 sm:grid-cols-[64px_minmax(0,1fr)] sm:pl-10 xl:grid-cols-[64px_minmax(0,1fr)_auto] ${cardColors[item.status]} ${selectedIds.includes(item.id) && item.status === 'scheduled' ? 'appointment-selected' : ''} ${draggingId === item.id ? 'opacity-45' : ''}`}>
+    return <div key={item.id} data-appointment-card className={`appointment-card appointment-record relative grid gap-3 px-4 py-3 sm:grid-cols-[64px_minmax(0,1fr)] sm:pl-10 xl:grid-cols-[64px_minmax(0,1fr)_auto] ${cardColors[item.status]} ${selectedIds.includes(item.id) && item.status === 'scheduled' ? 'appointment-selected' : ''} ${draggingId === item.id ? 'opacity-45' : ''}`}>
       <button type="button" draggable onDragStart={(event) => startDragging(event, item)} onDragEnd={() => { setDraggingId(null); setDropTarget(null); }} aria-label={`Arrastar ${item.dogName || 'agendamento'} para outro dia`} title="Arraste para outro dia" className="absolute top-1/2 left-1 hidden h-10 w-7 -translate-y-1/2 cursor-grab items-center justify-center rounded text-[#82758d] hover:bg-[#f0ecf5] sm:flex"><GripVertical size={18} /></button>
       <div className="flex items-center gap-3 text-sm font-bold text-[#51435d] sm:flex-col sm:items-start sm:gap-2">{selectionCheckbox(item)}<time dateTime={`${item.scheduledDate}T${item.scheduledTime}`}>{item.scheduledTime}</time></div>
       <div className="min-w-0">
@@ -1287,7 +1287,7 @@ export default function Home() {
           </div>
           {dayActions(dailyAgendaDate, dailyAppointments)}
           {dailyAppointments.length ? (
-            <div className="space-y-2.5">
+            <div className="space-y-3 rounded-2xl bg-[#efedf3] p-3 sm:space-y-4">
               {dailyAppointments.map((item) => renderCompactAppointment(item, true))}
             </div>
           ) : (

@@ -452,7 +452,7 @@ export function AgendaWorkspace(props: Props) {
                         key={day}
                         onDragOver={(event) => props.onDragOver(event, day)}
                         onDrop={(event) => props.onDrop(event, day)}
-                        className={`rounded-2xl border bg-white ${props.draggingId && props.dropTarget === day ? 'border-[#7353a6] ring-2 ring-[#7353a6]/20' : 'border-[#e1dbe8]'}`}
+                        className={`rounded-2xl border bg-[#efedf3] ${props.draggingId && props.dropTarget === day ? 'border-[#7353a6] ring-2 ring-[#7353a6]/20' : 'border-[#e1dbe8]'}`}
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#eeeaf2] px-4 py-3">
                           <h3 className="text-sm font-bold capitalize">
@@ -474,7 +474,7 @@ export function AgendaWorkspace(props: Props) {
                         </div>
                         {renderDayActions(day, items)}
                         {items.length ? (
-                          <div className="divide-y divide-[#eeeaf2]">
+                          <div className="space-y-3 p-3 sm:space-y-4 sm:p-4">
                             {items.map((item) => renderAppointment(item))}
                           </div>
                         ) : (
