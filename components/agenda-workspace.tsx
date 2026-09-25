@@ -30,6 +30,7 @@ type Props = {
   renderAppointment: (item: Appointment) => ReactNode;
   renderDayActions: (date: string, items: Appointment[]) => ReactNode;
   onNew: (date: string) => void;
+  onCreateProfile: () => void;
   onOpenProfile: (profile: PetProfile) => void;
   onScheduleProfile: (profile: PetProfile) => void;
   onViewChange: () => void;
@@ -497,6 +498,7 @@ export function AgendaWorkspace(props: Props) {
       ) : (
         <>
           <div className={toolbarClass}>
+            <Button variant="outline" onClick={props.onCreateProfile} className="mb-3"><Plus />Cadastrar cliente e pet</Button>
             <h2 className="mb-3 text-xl font-extrabold">
               Clientes e pets{' '}
               <span className="ml-1 text-sm font-medium text-[#756a81]">

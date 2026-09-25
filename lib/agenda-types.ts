@@ -40,3 +40,5 @@ export type PetProfile = {
   lastAmountCents: number | null;
   notes: string;
 };
+
+export type ClientProfile = { id: string; ownerName: string; whatsapp: string; cpf: string };
