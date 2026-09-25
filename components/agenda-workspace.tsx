@@ -181,7 +181,7 @@ export function AgendaWorkspace(props: Props) {
             year: 'numeric',
           }).format(new Date(`${date}T12:00:00`));
   const toolbarClass =
-    'sticky top-0 z-20 -mx-3 border-b border-[#e5e1e9] bg-[#f7f7f9]/95 px-3 py-3 backdrop-blur sm:mx-0 sm:px-0';
+    '-mx-3 border-b border-[#e5e1e9] bg-[#f7f7f9] px-3 py-3 sm:mx-0 sm:px-0';
   const visit = (item: Appointment | undefined) =>
     item ? (
       <>
