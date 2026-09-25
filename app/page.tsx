@@ -4,7 +4,7 @@ import { ComponentProps, DragEvent, FormEvent, useEffect, useMemo, useRef, useSt
 import {
   Activity, Calculator, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight,
   CircleDollarSign, Clock3, CreditCard, Dog, GripVertical, History, IdCard, ListChecks, LoaderCircle, LogOut,
-  MessageCircle, PawPrint, Pencil, Plus, RefreshCw, Scissors, ShieldCheck,
+  MessageCircle, PawPrint, Pencil, Plus, RefreshCw, Scissors, Search, Send, ShieldCheck,
   Sparkles, Trash2, UserPlus, UserRound, Users, X,
 } from 'lucide-react';
 import { Button as BaseButton } from '@/components/ui/button';
@@ -50,6 +50,8 @@ const cardColors: Record<Status, string> = {
 type Appointment = {
   id: string;
   groupId: string;
+  clientId: string | null;
+  petId: string | null;
   customerPetName: string;
   ownerName: string;
   dogName: string;
@@ -78,6 +80,18 @@ type AuditLog = {
   entityId: string;
   description: string;
   createdAt: string;
+};
+type PetProfile = {
+  key: string;
+  clientId: string | null;
+  petId: string | null;
+  ownerName: string;
+  dogName: string;
+  whatsapp: string;
+  cpf: string;
+  favoriteServices: string[];
+  lastTime: string;
+  lastAmountCents: number | null;
 };
 
 const serviceOptions = [
@@ -217,7 +231,12 @@ function whatsappUrl(value: string) {
   return `https://wa.me/${internationalNumber}`;
 }
 
+function normalizeSearch(value: string) {
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 const emptyForm = (scheduledDate = localDateString()) => ({
+  clientId: null as string | null, petId: null as string | null,
   ownerName: '', dogName: '', whatsapp: '', cpf: '', paymentMethod: '' as PaymentMethod,
   planType: 'monthly' as PlanType, amount: '', paid: false,
   scheduledDate, scheduledTime: '09:00',
@@ -228,6 +247,7 @@ const emptyForm = (scheduledDate = localDateString()) => ({
 
 export default function Home() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [savedPetProfiles, setSavedPetProfiles] = useState<PetProfile[]>([]);
   const [authStatus, setAuthStatus] = useState<'loading' | 'authorized' | 'signed_out' | 'forbidden'>('loading');
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [blockedEmail, setBlockedEmail] = useState('');
@@ -235,6 +255,14 @@ export default function Home() {
   const [loginSaving, setLoginSaving] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [agendaSearch, setAgendaSearch] = useState('');
+  const [petSearch, setPetSearch] = useState('');
+  const [petSearchFocused, setPetSearchFocused] = useState(false);
+  const [duplicateOpen, setDuplicateOpen] = useState(false);
+  const [whatsappOpen, setWhatsappOpen] = useState(false);
+  const [whatsappTarget, setWhatsappTarget] = useState<Appointment | null>(null);
+  const [whatsappTemplate, setWhatsappTemplate] = useState<'confirm' | 'ready' | 'payment' | 'renew'>('confirm');
+  const [whatsappMessage, setWhatsappMessage] = useState('');
   const [savingForm, setSavingForm] = useState('');
   const mutationQueue = useRef<Promise<unknown>>(Promise.resolve());
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -299,8 +327,9 @@ export default function Home() {
         setAuthStatus('authorized');
         const response = await fetch('/api/appointments');
         if (!response.ok) throw new Error('request failed');
-        const data = await response.json() as { appointments?: Appointment[]; rates?: CardRates };
+        const data = await response.json() as { appointments?: Appointment[]; petProfiles?: PetProfile[]; rates?: CardRates };
         setAppointments(data.appointments ?? []);
+        setSavedPetProfiles(data.petProfiles ?? []);
         if (data.rates) setRates(data.rates);
       } catch {
         setNotice('Não foi possível carregar a agenda. Tente novamente.');
@@ -323,6 +352,72 @@ export default function Home() {
     });
     return stats;
   }, [appointments]);
+
+  const petProfiles = useMemo(() => {
+    const profiles = new Map(savedPetProfiles.map((profile) => [profile.key, { ...profile, favoriteServices: [...profile.favoriteServices] }]));
+    [...appointments].reverse().forEach((item) => {
+      const fallbackKey = [normalizeSearch(item.dogName), normalizeSearch(item.ownerName), item.whatsapp.replace(/\D/g, ''), item.cpf.replace(/\D/g, '')].join('|');
+      const key = item.petId || fallbackKey;
+      if (!key) return;
+      const existing = profiles.get(key);
+      if (existing) {
+        if (!existing.favoriteServices.length && item.services.length) existing.favoriteServices = item.services;
+        return;
+      }
+      profiles.set(key, {
+        key,
+        clientId: item.clientId,
+        petId: item.petId,
+        ownerName: item.ownerName,
+        dogName: item.dogName,
+        whatsapp: item.whatsapp,
+        cpf: item.cpf,
+        favoriteServices: item.services,
+        lastTime: item.scheduledTime || '09:00',
+        lastAmountCents: item.paymentDetails?.baseCents ?? item.amountCents,
+      });
+    });
+    return [...profiles.values()]
+      .map((profile) => ({ ...profile, favoriteServices: profile.favoriteServices.length ? profile.favoriteServices : ['Banho'] }))
+      .sort((a, b) => (a.dogName || a.ownerName).localeCompare(b.dogName || b.ownerName, 'pt-BR'));
+  }, [appointments, savedPetProfiles]);
+
+  const matchingPets = useMemo(() => {
+    const query = normalizeSearch(petSearch);
+    if (!query) return petProfiles.slice(0, 8);
+    const digits = petSearch.replace(/\D/g, '');
+    return petProfiles.filter((pet) => {
+      const text = normalizeSearch(`${pet.dogName} ${pet.ownerName} ${pet.whatsapp} ${pet.cpf}`);
+      return text.includes(query) || Boolean(digits && `${pet.whatsapp}${pet.cpf}`.replace(/\D/g, '').includes(digits));
+    }).slice(0, 8);
+  }, [petProfiles, petSearch]);
+
+  const visibleAppointments = useMemo(() => {
+    const query = normalizeSearch(agendaSearch);
+    if (!query) return appointments;
+    const digits = agendaSearch.replace(/\D/g, '');
+    return appointments.filter((item) => {
+      const text = normalizeSearch(`${item.dogName} ${item.ownerName} ${item.whatsapp} ${item.cpf} ${item.services.join(' ')}`);
+      return text.includes(query) || Boolean(digits && `${item.whatsapp}${item.cpf}`.replace(/\D/g, '').includes(digits));
+    });
+  }, [appointments, agendaSearch]);
+
+  const visibleDays = agendaSearch
+    ? [...new Set(visibleAppointments.map((item) => item.scheduledDate))].sort()
+    : days;
+
+  const duplicateAppointments = useMemo(() => {
+    const dates = new Set(form.sessionDates.slice(0, totalSessionsFor(form.planType)));
+    const dog = normalizeSearch(form.dogName);
+    const owner = normalizeSearch(form.ownerName);
+    const whatsapp = form.whatsapp.replace(/\D/g, '');
+    return appointments.filter((item) => {
+      if (!dates.has(item.scheduledDate)) return false;
+      if (form.petId && item.petId) return form.petId === item.petId;
+      if (!dog || normalizeSearch(item.dogName) !== dog) return false;
+      return !owner || normalizeSearch(item.ownerName) === owner || Boolean(whatsapp && item.whatsapp.replace(/\D/g, '') === whatsapp);
+    });
+  }, [appointments, form]);
 
   const todayAppointments = appointments.filter((item) => item.scheduledDate === today);
   const dailyAppointments = appointments.filter((item) => item.scheduledDate === dailyAgendaDate);
@@ -365,7 +460,7 @@ export default function Home() {
       const response = await fetch('/api/appointments', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
       });
-      const data = await response.json().catch(() => ({ error: 'unexpected_response' })) as { appointments?: Appointment[]; rates?: CardRates; error?: string; blockers?: string[]; missing?: string[]; pendingCount?: number };
+      const data = await response.json().catch(() => ({ error: 'unexpected_response' })) as { appointments?: Appointment[]; petProfiles?: PetProfile[]; rates?: CardRates; error?: string; blockers?: string[]; missing?: string[]; pendingCount?: number };
       if (!response.ok) {
         if (data.rates) setRates(data.rates);
         const blockerMessage = response.status === 401
@@ -391,6 +486,7 @@ export default function Home() {
         return false;
       }
       setAppointments(data.appointments ?? []);
+      if (data.petProfiles) setSavedPetProfiles(data.petProfiles);
       setSelectedIds((ids) => ids.filter((id) => (data.appointments ?? []).some((item) => item.id === id && item.status === 'scheduled')));
       if (message) {
         setNotice(message);
@@ -437,8 +533,28 @@ export default function Home() {
 
   function openNew(date = today) {
     setForm(emptyForm(date));
+    setPetSearch('');
     setActiveServiceSession(0);
     setNewOpen(true);
+  }
+
+  function selectPet(pet: PetProfile) {
+    const favoriteServices = pet.favoriteServices.length ? pet.favoriteServices : ['Banho'];
+    const count = totalSessionsFor(form.planType);
+    setForm({
+      ...form,
+      clientId: pet.clientId,
+      petId: pet.petId,
+      ownerName: pet.ownerName,
+      dogName: pet.dogName,
+      whatsapp: pet.whatsapp,
+      cpf: pet.cpf,
+      scheduledTime: pet.lastTime || form.scheduledTime,
+      amount: pet.lastAmountCents === null ? form.amount : formatMoney(pet.lastAmountCents) ?? '',
+      sessionServices: Array.from({ length: count }, () => [...favoriteServices]),
+    });
+    setPetSearch(`${pet.dogName || 'Pet sem nome'}${pet.ownerName ? ` · ${pet.ownerName}` : ''}`);
+    setActiveServiceSession(0);
   }
 
   function toggleService(service: string, edit = false) {
@@ -456,8 +572,7 @@ export default function Home() {
     });
   }
 
-  async function createAppointment(event: FormEvent) {
-    event.preventDefault();
+  async function persistNewAppointment() {
     if (savingForm) return;
     setSavingForm('create');
     const ok = await mutate({
@@ -466,7 +581,40 @@ export default function Home() {
       expectedRateBps: cardRateBps(form.paymentMethod, rates),
     }, 'Agendamento criado');
     setSavingForm('');
-    if (ok) setNewOpen(false);
+    if (ok) {
+      setDuplicateOpen(false);
+      setNewOpen(false);
+    }
+  }
+
+  async function createAppointment(event: FormEvent) {
+    event.preventDefault();
+    if (duplicateAppointments.length) {
+      setDuplicateOpen(true);
+      return;
+    }
+    await persistNewAppointment();
+  }
+
+  function whatsappText(item: Appointment, template: typeof whatsappTemplate) {
+    const greeting = item.ownerName ? `Olá, ${item.ownerName}!` : 'Olá!';
+    const pet = item.dogName || 'seu pet';
+    if (template === 'ready') return `${greeting} O ${pet} já está pronto e pode ser buscado no HEIN PET SALON. 🐾`;
+    if (template === 'payment') return `${greeting} O pagamento ${item.planType === 'single' ? 'do banho' : 'do plano'} do ${pet} está pendente. Se precisar, posso enviar os dados para pagamento.`;
+    if (template === 'renew') return `${greeting} O plano de banhos do ${pet} terminou. Gostaria de renovar e já escolher as próximas datas? 🐶`;
+    return `${greeting} Passando para confirmar o banho do ${pet} no dia ${prettyDate(item.scheduledDate)} às ${item.scheduledTime}. 🐾`;
+  }
+
+  function chooseWhatsappTemplate(template: typeof whatsappTemplate, item = whatsappTarget) {
+    setWhatsappTemplate(template);
+    if (item) setWhatsappMessage(whatsappText(item, template));
+  }
+
+  function openWhatsapp(item: Appointment) {
+    setWhatsappTarget(item);
+    setWhatsappTemplate('confirm');
+    setWhatsappMessage(whatsappText(item, 'confirm'));
+    setWhatsappOpen(true);
   }
 
   function openEdit(item: Appointment) {
@@ -890,6 +1038,7 @@ export default function Home() {
     await fetch('/api/session', { method: 'DELETE' });
     setCurrentUser(null);
     setAppointments([]);
+    setSavedPetProfiles([]);
     setLoginForm({ email: '', password: '' });
     setLoginError('');
     setAuthStatus('signed_out');
@@ -991,8 +1140,8 @@ export default function Home() {
         <section className="min-w-0">
           <div className="mb-5 flex flex-wrap items-end justify-between gap-3 sm:mb-6 sm:gap-4">
             <div>
-              <p className="mb-1 text-sm font-semibold text-[#86778f]">Agenda mensal</p>
-              <h2 className="font-heading text-[30px] font-extrabold capitalize tracking-[-0.045em] sm:text-[34px]">{prettyMonth(selectedMonth)}</h2>
+              <p className="mb-1 text-sm font-semibold text-[#86778f]">{agendaSearch ? 'Pesquisa em toda a agenda' : 'Agenda mensal'}</p>
+              <h2 className="font-heading text-[30px] font-extrabold capitalize tracking-[-0.045em] sm:text-[34px]">{agendaSearch ? `${visibleAppointments.length} ${visibleAppointments.length === 1 ? 'atendimento' : 'atendimentos'}` : prettyMonth(selectedMonth)}</h2>
               <p className="mt-1 hidden text-xs font-semibold text-[#92849c] sm:block">Arraste pelo ícone <GripVertical className="inline" size={14} /> para trocar o dia</p>
             </div>
             <div className="flex w-full items-center justify-between gap-1.5 rounded-xl border border-[#e4dced] bg-white p-1 shadow-sm sm:w-auto">
@@ -1000,6 +1149,18 @@ export default function Home() {
               <button type="button" onClick={() => setSelectedMonth(today.slice(0, 7))} className="inline-flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-extrabold capitalize text-[#62556c] transition hover:bg-[#f1ecf7] sm:min-w-36 sm:flex-none"><CalendarDays size={15} /> {selectedMonth === today.slice(0, 7) ? 'Este mês' : 'Voltar para hoje'}</button>
               <Button variant="ghost" size="icon-sm" onClick={() => setSelectedMonth((month) => addMonths(month, 1))} aria-label="Próximo mês" title="Próximo mês"><ChevronRight /></Button>
             </div>
+          </div>
+
+          <div className="relative mb-5 sm:mb-6">
+            <Search className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-[#8d7e97]" size={18} />
+            <Input
+              type="search"
+              value={agendaSearch}
+              onChange={(event) => setAgendaSearch(event.target.value)}
+              placeholder="Buscar pet, dono, WhatsApp, CPF ou serviço"
+              className="h-12 rounded-xl border-[#ddd2e7] bg-white pr-24 pl-11 shadow-sm"
+            />
+            {agendaSearch && <button type="button" onClick={() => setAgendaSearch('')} className="absolute top-1/2 right-3 -translate-y-1/2 rounded-lg px-2 py-1 text-xs font-bold text-[#7353a6] hover:bg-[#f1ecf7]">Limpar</button>}
           </div>
 
           <Button
@@ -1027,8 +1188,15 @@ export default function Home() {
             <div className="rounded-2xl border border-[#e4dced] bg-[#fffbff] p-12 text-center text-sm font-semibold text-[#81748a]"><LoaderCircle className="mx-auto mb-2 animate-spin text-[#7353a6]" /> Carregando agenda...</div>
           ) : (
             <div className="space-y-4">
-              {days.map((date) => {
-                const dayAppointments = appointments.filter((item) => item.scheduledDate === date);
+              {agendaSearch && visibleDays.length === 0 && (
+                <div className="rounded-2xl border border-dashed border-[#cdbce0] bg-[#fffbff] p-8 text-center">
+                  <Search className="mx-auto text-[#9b6bc2]" />
+                  <p className="mt-2 font-heading font-extrabold">Nenhum atendimento encontrado</p>
+                  <p className="mt-1 text-xs text-[#81748a]">Tente buscar por outro nome, telefone, CPF ou serviço.</p>
+                </div>
+              )}
+              {visibleDays.map((date) => {
+                const dayAppointments = visibleAppointments.filter((item) => item.scheduledDate === date);
                 return (
                   <article
                     key={date}
@@ -1050,7 +1218,10 @@ export default function Home() {
                         <h3 className={`font-heading text-lg font-extrabold ${date === today ? 'text-[#7353a6]' : ''}`}>{date === today ? 'Hoje' : date === addDays(today, 1) ? 'Amanhã' : prettyDate(date).split(',')[0]}</h3>
                         <span className="block truncate text-xs font-medium capitalize text-[#81748a] sm:inline sm:text-sm">{prettyDate(date)}</span>
                       </div>
-                      <span className="shrink-0 rounded-full bg-[#f1edf5] px-2.5 py-1 text-xs font-bold text-[#776a80]">{dayAppointments.length} {dayAppointments.length === 1 ? 'dog' : 'dogs'}</span>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span className="rounded-full bg-[#f1edf5] px-2.5 py-1 text-xs font-bold text-[#776a80]">{dayAppointments.length} {dayAppointments.length === 1 ? 'dog' : 'dogs'}</span>
+                        <button type="button" onClick={() => openNew(date)} className="inline-flex h-8 items-center gap-1 rounded-lg bg-[#eee6f7] px-2.5 text-xs font-extrabold text-[#7353a6] transition hover:bg-[#e3d7ef]" aria-label={`Agendar em ${prettyDate(date)}`}><Plus size={14} /> Agendar</button>
+                      </div>
                     </div>
 
                     {dayActions(date, dayAppointments)}
@@ -1095,16 +1266,15 @@ export default function Home() {
                                     {item.cpf && <p className="text-[10px] font-semibold text-[#9b8ca5]">CPF: {item.cpf}</p>}
                                   </div>
                                   {item.whatsapp && (
-                                    <a
-                                      href={whatsappUrl(item.whatsapp)}
-                                      target="_blank"
-                                      rel="noreferrer"
+                                    <button
+                                      type="button"
+                                      onClick={() => openWhatsapp(item)}
                                       aria-label={`Abrir WhatsApp de ${item.ownerName || item.dogName || 'cliente'}`}
                                       title={`WhatsApp: ${item.whatsapp}`}
                                       className="grid h-8 w-8 place-items-center rounded-full bg-[#e6f7eb] text-[#1e8b4c] transition hover:bg-[#d5f0de]"
                                     >
                                       <MessageCircle size={17} />
-                                    </a>
+                                    </button>
                                   )}
                                   <span className="rounded-full bg-[#eee6f7] px-2 py-0.5 text-[11px] font-bold text-[#7353a6]">{planLabels[item.planType]} · {item.sessionNumber} de {item.totalSessions}</span>
                                   <span className={`appointment-status ${cardColors[item.status]}`}>{item.status === 'completed' ? <CheckCircle2 size={14} /> : item.status === 'absent' ? <X size={14} /> : <Clock3 size={14} />}{statusLabels[item.status]}</span>
@@ -1235,7 +1405,7 @@ export default function Home() {
                   <p className="mt-3 flex flex-wrap items-center gap-x-1.5 text-xs text-[#7d7087]"><Scissors size={13} /> {item.services.length ? item.services.join(' · ') : 'Sem serviços definidos'}</p>
                   <PaidTotal item={item} />
                   <div className="mt-3 grid grid-cols-2 gap-2 border-t border-[#eee8f3] pt-3 sm:flex sm:flex-wrap sm:items-center sm:gap-1.5">
-                    {item.whatsapp && <a href={whatsappUrl(item.whatsapp)} target="_blank" rel="noreferrer" className="flex h-11 items-center justify-center gap-2 rounded-lg bg-[#e6f7eb] px-3 text-xs font-bold text-[#1e8b4c] sm:grid sm:h-8 sm:w-8 sm:p-0" aria-label="Abrir WhatsApp"><MessageCircle size={16} /><span className="sm:hidden">WhatsApp</span></a>}
+                    {item.whatsapp && <button type="button" onClick={() => openWhatsapp(item)} className="flex h-11 items-center justify-center gap-2 rounded-lg bg-[#e6f7eb] px-3 text-xs font-bold text-[#1e8b4c] sm:grid sm:h-8 sm:w-8 sm:p-0" aria-label="Abrir WhatsApp"><MessageCircle size={16} /><span className="sm:hidden">WhatsApp</span></button>}
                     <Button variant="outline" size="sm" onClick={() => editFromOverview(item)} className="h-11 w-full sm:h-8 sm:w-auto"><Pencil /> Editar</Button>
                     {item.planType !== 'single' && <Button variant="outline" size="sm" onClick={() => openPlanFromToday(item)} className="h-11 w-full text-[#7353a6] sm:h-8 sm:w-auto"><ListChecks /> Ver plano</Button>}
                     {item.status === 'scheduled' ? (
@@ -1288,7 +1458,7 @@ export default function Home() {
                 </div>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2 border-t border-[#e5dced] pt-3 sm:flex sm:flex-wrap sm:items-center">
-                {selectedPlanHead.whatsapp && <a href={whatsappUrl(selectedPlanHead.whatsapp)} target="_blank" rel="noreferrer" className="flex h-11 items-center justify-center gap-2 rounded-lg bg-[#e6f7eb] px-3 text-xs font-bold text-[#1e8b4c] sm:grid sm:h-9 sm:w-9 sm:p-0" aria-label="Abrir WhatsApp"><MessageCircle size={17} /><span className="sm:hidden">WhatsApp</span></a>}
+                {selectedPlanHead.whatsapp && <button type="button" onClick={() => openWhatsapp(selectedPlanHead)} className="flex h-11 items-center justify-center gap-2 rounded-lg bg-[#e6f7eb] px-3 text-xs font-bold text-[#1e8b4c] sm:grid sm:h-9 sm:w-9 sm:p-0" aria-label="Abrir WhatsApp"><MessageCircle size={17} /><span className="sm:hidden">WhatsApp</span></button>}
                 <Button
 
                   variant="outline"
@@ -1539,6 +1709,33 @@ export default function Home() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={whatsappOpen} onOpenChange={setWhatsappOpen}>
+        <DialogContent className="mobile-sheet max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-4 sm:max-w-lg sm:p-5">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><MessageCircle className="text-[#1e8b4c]" /> Mensagem no WhatsApp</DialogTitle>
+            <DialogDescription>{whatsappTarget?.dogName || whatsappTarget?.ownerName || 'Cliente'} · escolha uma mensagem e ajuste se precisar.</DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-2">
+            {([
+              ['confirm', 'Confirmar banho'],
+              ['ready', 'Pet pronto'],
+              ['payment', 'Lembrar pagamento'],
+              ['renew', 'Oferecer renovação'],
+            ] as const).map(([value, label]) => (
+              <button key={value} type="button" onClick={() => chooseWhatsappTemplate(value)} className={`min-h-11 rounded-xl border px-3 py-2 text-left text-xs font-extrabold transition ${whatsappTemplate === value ? 'border-[#1e8b4c] bg-[#e6f7eb] text-[#176d3c]' : 'border-[#e4dced] bg-white text-[#66576f] hover:bg-[#f7f3fb]'}`}>{label}</button>
+            ))}
+          </div>
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Mensagem</span>
+            <textarea value={whatsappMessage} onChange={(event) => setWhatsappMessage(event.target.value)} rows={5} className="w-full resize-y rounded-xl border border-[#ddd2e7] bg-white p-3 text-sm leading-6 outline-none focus:ring-2 focus:ring-[#7353a6]/25" />
+          </label>
+          <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5">
+            <Button type="button" variant="outline" onClick={() => setWhatsappOpen(false)}>Cancelar</Button>
+            {whatsappTarget && <a href={`${whatsappUrl(whatsappTarget.whatsapp)}?text=${encodeURIComponent(whatsappMessage)}`} target="_blank" rel="noreferrer" onClick={() => setWhatsappOpen(false)} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-[#1e8b4c] px-4 text-sm font-extrabold text-white transition hover:bg-[#176d3c]"><Send size={16} /> Abrir WhatsApp</a>}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={newOpen} onOpenChange={setNewOpen}>
         <DialogContent className="mobile-sheet max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-4 sm:max-w-xl sm:p-5">
           <DialogHeader>
@@ -1546,8 +1743,36 @@ export default function Home() {
             <DialogDescription>Defina o primeiro banho e, se precisar, escolha uma data diferente para cada sessão.</DialogDescription>
           </DialogHeader>
           <form onSubmit={createAppointment} className="space-y-5">
+            <div className="relative rounded-2xl border border-[#d9cbe6] bg-[#f7f3fb] p-3.5">
+              <label className="block">
+                <span className="mb-1.5 flex items-center gap-1.5 text-xs font-extrabold text-[#654c78]"><Search size={14} /> Buscar cliente ou pet já cadastrado</span>
+                <Input
+                  autoFocus
+                  type="search"
+                  value={petSearch}
+                  onFocus={() => setPetSearchFocused(true)}
+                  onBlur={() => window.setTimeout(() => setPetSearchFocused(false), 120)}
+                  onChange={(event) => setPetSearch(event.target.value)}
+                  placeholder="Digite nome do pet, dono, WhatsApp ou CPF"
+                  className="h-11 bg-white"
+                />
+              </label>
+              {petSearchFocused && matchingPets.length > 0 && (
+                <div className="absolute right-3.5 left-3.5 z-30 mt-1 max-h-64 overflow-y-auto rounded-xl border border-[#d8cbe3] bg-white p-1.5 shadow-xl">
+                  {matchingPets.map((pet) => (
+                    <button key={pet.key} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { selectPet(pet); setPetSearchFocused(false); }} className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-[#f2ecf8]">
+                      <span className="min-w-0"><strong className="block truncate text-sm text-[#493852]">{pet.dogName || 'Pet sem nome'}</strong><small className="block truncate text-xs text-[#84748e]">{pet.ownerName || 'Dono não informado'}{pet.whatsapp ? ` · ${pet.whatsapp}` : ''}</small></span>
+                      <span className="shrink-0 text-[10px] font-extrabold text-[#7353a6]">USAR</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {(form.petId || form.clientId || (petSearch && form.dogName))
+                ? <p className="mt-2 text-xs font-semibold text-[#7353a6]">Dados, horário, valor e serviços favoritos preenchidos automaticamente. Você pode alterar tudo abaixo.</p>
+                : <p className="mt-2 text-[11px] text-[#897a93]">Não encontrou? Preencha abaixo e o cliente ficará disponível nos próximos agendamentos.</p>}
+            </div>
             <div className="grid gap-3 sm:grid-cols-3">
-              <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><UserRound size={14} /> Nome do dono</span><Input autoFocus value={form.ownerName} onChange={(event) => setForm({ ...form, ownerName: event.target.value })} placeholder="Ex.: Ana" className="h-11 bg-white" /></label>
+              <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><UserRound size={14} /> Nome do dono</span><Input value={form.ownerName} onChange={(event) => setForm({ ...form, ownerName: event.target.value })} placeholder="Ex.: Ana" className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><Dog size={14} /> Nome do cachorro</span><Input value={form.dogName} onChange={(event) => setForm({ ...form, dogName: event.target.value })} placeholder="Ex.: Bob" className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><MessageCircle size={14} /> WhatsApp</span><Input type="tel" inputMode="tel" value={form.whatsapp} onChange={(event) => setForm({ ...form, whatsapp: event.target.value })} placeholder="(47) 99999-9999" className="h-11 bg-white" /></label>
             </div>
@@ -1687,6 +1912,25 @@ export default function Home() {
           </form>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={duplicateOpen} onOpenChange={(open) => { if (!savingForm) setDuplicateOpen(open); }}>
+        <AlertDialogContent className="mobile-alert max-w-[calc(100%-1.5rem)] border-0 bg-[#fffbff]">
+          <AlertDialogHeader>
+            <AlertDialogMedia className="bg-[#f7e8d9] text-[#a05b31]"><CalendarDays /></AlertDialogMedia>
+            <AlertDialogTitle className="font-heading font-extrabold">Possível agendamento duplicado</AlertDialogTitle>
+            <AlertDialogDescription>
+              {form.dogName || 'Este pet'} já aparece em {duplicateAppointments.length} {duplicateAppointments.length === 1 ? 'atendimento nas datas escolhidas' : 'atendimentos nas datas escolhidas'}. Confira antes de continuar.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 rounded-xl bg-[#f7f3fb] p-3 text-sm">
+            {duplicateAppointments.slice(0, 4).map((item) => <p key={item.id} className="font-semibold">{prettyDate(item.scheduledDate)} às {item.scheduledTime} · {item.dogName || item.ownerName || 'Sem nome'}</p>)}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={Boolean(savingForm)}>Voltar e conferir</AlertDialogCancel>
+            <Button disabled={Boolean(savingForm)} onClick={persistNewAppointment}>{savingForm === 'create' ? <LoaderCircle className="animate-spin" /> : <Plus />} Criar mesmo assim</Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={editOpen} onOpenChange={(open) => { setEditOpen(open); if (!open) setEditDateChoiceOpen(false); }}>
         <DialogContent className="mobile-sheet max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-4 sm:max-w-lg sm:p-5">

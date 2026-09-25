@@ -19,9 +19,40 @@ create unique index if not exists profiles_email_unique
 create index if not exists profiles_can_access_idx
   on public.profiles (can_access);
 
+create table if not exists public.clients (
+  id uuid primary key default gen_random_uuid(),
+  owner_name text not null default '',
+  whatsapp text not null default '',
+  whatsapp_normalized text not null default '',
+  cpf text not null default '',
+  cpf_normalized text not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists clients_owner_name_idx on public.clients (lower(owner_name));
+create index if not exists clients_whatsapp_idx on public.clients (whatsapp_normalized);
+create index if not exists clients_cpf_idx on public.clients (cpf_normalized);
+
+create table if not exists public.pets (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references public.clients(id) on delete cascade,
+  name text not null default '',
+  favorite_services jsonb not null default '[]'::jsonb,
+  last_time time,
+  last_amount_cents integer check (last_amount_cents is null or last_amount_cents >= 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists pets_client_id_idx on public.pets (client_id);
+create index if not exists pets_name_idx on public.pets (lower(name));
+
 create table if not exists public.appointments (
   id uuid primary key default gen_random_uuid(),
   group_id uuid not null,
+  client_id uuid references public.clients(id) on delete set null,
+  pet_id uuid references public.pets(id) on delete set null,
   customer_pet_name text not null default '',
   owner_name text not null default '',
   dog_name text not null default '',
@@ -48,6 +79,8 @@ create index if not exists appointments_scheduled_date_idx
   on public.appointments (scheduled_date, scheduled_time);
 create index if not exists appointments_group_id_idx
   on public.appointments (group_id);
+create index if not exists appointments_pet_id_idx
+  on public.appointments (pet_id);
 create index if not exists appointments_status_date_idx
   on public.appointments (status, scheduled_date);
 
@@ -113,6 +146,8 @@ create trigger on_auth_user_created
   for each row execute procedure public.handle_new_auth_user();
 
 alter table public.profiles enable row level security;
+alter table public.clients enable row level security;
+alter table public.pets enable row level security;
 alter table public.appointments enable row level security;
 alter table public.payment_settings enable row level security;
 alter table public.audit_logs enable row level security;

@@ -11,6 +11,7 @@ O projeto usa o Supabase para autenticação por e-mail/senha e para armazenar a
 As tabelas criadas são:
 
 - `profiles`: usuários, nível de acesso e a flag `can_access`;
+- `clients` e `pets`: cadastro rápido, serviços favoritos e últimas preferências;
 - `appointments`: banhos avulsos e sessões dos planos;
 - `payment_settings`: taxas de crédito e débito;
 - `audit_logs`: histórico de ações;
@@ -54,3 +55,7 @@ Nunca exponha ou envie a `SUPABASE_SERVICE_ROLE_KEY`. Ela deve existir somente e
 ## 5. Sobre os dados atuais
 
 O arquivo SQL cria a estrutura vazia. Os registros do banco antigo não são copiados automaticamente. Antes de encerrar o site atual, exporte e importe esses dados em uma etapa separada.
+
+## Atualização de uma instalação existente
+
+Se você já executou o `schema.sql` antes da inclusão do cadastro rápido, execute também [`supabase/migrations/20260925_quick_registration.sql`](supabase/migrations/20260925_quick_registration.sql) no SQL Editor.
