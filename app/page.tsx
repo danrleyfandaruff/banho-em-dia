@@ -240,6 +240,7 @@ export default function Home() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
   const [todayOpen, setTodayOpen] = useState(false);
+  const [dailyAgendaDate, setDailyAgendaDate] = useState(() => localDateString());
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [paymentTarget, setPaymentTarget] = useState<Appointment | null>(null);
   const [batchPaymentTargets, setBatchPaymentTargets] = useState<Appointment[]>([]);
@@ -316,6 +317,7 @@ export default function Home() {
   }, [appointments]);
 
   const todayAppointments = appointments.filter((item) => item.scheduledDate === today);
+  const dailyAppointments = appointments.filter((item) => item.scheduledDate === dailyAgendaDate);
   const pendingGroups = Array.from(new Map(appointments.filter((item) => !item.paid).map((item) => [item.groupId, item])).values());
   const renewalItems = appointments.filter((item) =>
     item.planType !== 'single'
@@ -502,6 +504,11 @@ export default function Home() {
   function openPlanFromToday(item: Appointment) {
     setTodayOpen(false);
     openPlan(item, true);
+  }
+
+  function changeDailyAgendaDate(date: string) {
+    setDailyAgendaDate(date);
+    setSelectedIds([]);
   }
 
   function updatePaid(item: Appointment) {
@@ -875,7 +882,7 @@ export default function Home() {
 
           <Button
             type="button"
-            onClick={() => setTodayOpen(true)}
+            onClick={() => { changeDailyAgendaDate(today); setTodayOpen(true); }}
             className="mb-5 h-auto w-full justify-between gap-2 rounded-2xl border border-[#cdbce0] bg-[#7353a6] p-3 text-left text-white shadow-[0_10px_28px_rgba(115,83,166,0.22)] hover:bg-[#684999] sm:mb-6 sm:gap-4 sm:p-5"
           >
             <span className="flex min-w-0 items-center gap-3 sm:gap-4">
@@ -1067,18 +1074,27 @@ export default function Home() {
       <Dialog open={todayOpen} onOpenChange={setTodayOpen}>
         <DialogContent className="mobile-sheet max-h-[92vh] overflow-y-auto border-0 bg-[#fffbff] p-4 sm:max-w-2xl sm:p-5">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><CalendarDays className="text-[#7353a6]" /> Atendimentos de hoje</DialogTitle>
-            <DialogDescription className="capitalize">{prettyDate(today)} · {todayAppointments.length} {todayAppointments.length === 1 ? 'atendimento' : 'atendimentos'}</DialogDescription>
+            <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><CalendarDays className="text-[#7353a6]" /> {dailyAgendaDate === today ? 'Atendimentos de hoje' : 'Agenda do dia'}</DialogTitle>
+            <DialogDescription className="capitalize">{prettyDate(dailyAgendaDate)} · {dailyAppointments.length} {dailyAppointments.length === 1 ? 'atendimento' : 'atendimentos'}</DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-3 gap-2">
-            <div className="rounded-xl bg-[#f1edf5] p-3 text-center"><strong className="font-heading text-2xl font-extrabold text-[#7353a6]">{todayAppointments.filter((item) => item.status === 'scheduled').length}</strong><span className="block text-[10px] font-bold text-[#81748a]">em aberto</span></div>
-            <div className="rounded-xl bg-[#e8f4eb] p-3 text-center"><strong className="font-heading text-2xl font-extrabold text-[#4f765c]">{todayAppointments.filter((item) => item.status === 'completed').length}</strong><span className="block text-[10px] font-bold text-[#678471]">concluídos</span></div>
-            <div className="rounded-xl bg-[#f7e7e2] p-3 text-center"><strong className="font-heading text-2xl font-extrabold text-[#ad533d]">{todayAppointments.filter((item) => item.status === 'absent').length}</strong><span className="block text-[10px] font-bold text-[#956c61]">faltas</span></div>
+          <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-end gap-2 rounded-2xl border border-[#e4dced] bg-[#f7f3fb] p-3">
+            <Button type="button" variant="outline" size="icon" onClick={() => changeDailyAgendaDate(addDays(dailyAgendaDate, -1))} aria-label="Dia anterior" title="Dia anterior"><ChevronLeft /></Button>
+            <label className="min-w-0">
+              <span className="mb-1 block text-xs font-bold text-[#6f6179]">Escolher data</span>
+              <Input type="date" value={dailyAgendaDate} onChange={(event) => { if (event.target.value) changeDailyAgendaDate(event.target.value); }} className="h-10 min-w-0 bg-white" />
+            </label>
+            <Button type="button" variant="outline" size="icon" onClick={() => changeDailyAgendaDate(addDays(dailyAgendaDate, 1))} aria-label="Próximo dia" title="Próximo dia"><ChevronRight /></Button>
+            {dailyAgendaDate !== today && <Button type="button" variant="ghost" onClick={() => changeDailyAgendaDate(today)} className="col-span-3 h-9 text-xs font-bold text-[#7353a6]"><CalendarDays /> Voltar para hoje</Button>}
           </div>
-          {dayActions(today, todayAppointments)}
-          {todayAppointments.length ? (
+          <div className="grid grid-cols-3 gap-2">
+            <div className="rounded-xl bg-[#f1edf5] p-3 text-center"><strong className="font-heading text-2xl font-extrabold text-[#7353a6]">{dailyAppointments.filter((item) => item.status === 'scheduled').length}</strong><span className="block text-[10px] font-bold text-[#81748a]">em aberto</span></div>
+            <div className="rounded-xl bg-[#e8f4eb] p-3 text-center"><strong className="font-heading text-2xl font-extrabold text-[#4f765c]">{dailyAppointments.filter((item) => item.status === 'completed').length}</strong><span className="block text-[10px] font-bold text-[#678471]">concluídos</span></div>
+            <div className="rounded-xl bg-[#f7e7e2] p-3 text-center"><strong className="font-heading text-2xl font-extrabold text-[#ad533d]">{dailyAppointments.filter((item) => item.status === 'absent').length}</strong><span className="block text-[10px] font-bold text-[#956c61]">faltas</span></div>
+          </div>
+          {dayActions(dailyAgendaDate, dailyAppointments)}
+          {dailyAppointments.length ? (
             <div className="space-y-2.5">
-              {todayAppointments.map((item) => (
+              {dailyAppointments.map((item) => (
                 <article key={`today-${item.id}`} className={`appointment-card rounded-2xl border p-4 ${cardColors[item.status]} ${selectedIds.includes(item.id) && item.status === 'scheduled' ? 'appointment-selected' : ''}`}>
                   {item.status === 'scheduled' && <label className="mb-3 flex min-h-8 cursor-pointer items-center gap-2 text-sm font-semibold">{selectionCheckbox(item)} Selecionar banho</label>}
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1115,9 +1131,9 @@ export default function Home() {
           ) : (
             <div className="rounded-2xl border border-dashed border-[#cdbce0] bg-[#f7f3fb] p-7 text-center">
               <Dog className="mx-auto text-[#9b6bc2]" size={28} />
-              <p className="mt-2 font-heading font-extrabold">Nenhum atendimento hoje</p>
+              <p className="mt-2 font-heading font-extrabold">Nenhum atendimento nesta data</p>
               <p className="mt-1 text-xs text-[#81748a]">Você pode cadastrar um banho para esta data.</p>
-              <Button onClick={() => { setTodayOpen(false); openNew(today); }} className="mt-4 bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90]"><Plus /> Novo atendimento</Button>
+              <Button onClick={() => { setTodayOpen(false); openNew(dailyAgendaDate); }} className="mt-4 bg-[#7353a6] font-bold text-white hover:bg-[#5e3f90]"><Plus /> Novo atendimento</Button>
             </div>
           )}
           <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5">
