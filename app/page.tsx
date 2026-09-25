@@ -17,6 +17,7 @@ import {
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
+import { registrationNameMessages, validateRegistrationNames } from '@/lib/registration-validation';
 import type { Appointment, PetProfile, PlanType, Status, PaymentMethod } from '@/lib/agenda-types';
 import { AgendaWorkspace } from '@/components/agenda-workspace';
 import { PlanSessionDates } from '@/components/plan-session-dates';
@@ -441,7 +442,9 @@ export default function Home() {
             : data.error === 'batch_already_paid' ? 'Um dos planos selecionados já foi pago. Atualize a agenda e tente novamente.'
             : data.error === 'invalid_batch_selection' ? 'Selecione pelo menos dois planos ainda não pagos.'
             : data.error === 'pet_profile_unavailable' ? 'Execute a migração de clientes e pets no Supabase antes de salvar observações.'
-            : data.error === 'pet_name_required' ? 'Informe o nome do pet antes de salvar observações.'
+            : data.error === 'names_required' ? registrationNameMessages.names_required
+            : data.error === 'owner_name_required' ? registrationNameMessages.owner_name_required
+            : data.error === 'pet_name_required' ? registrationNameMessages.pet_name_required
             : data.error === 'invalid_amount' ? 'Informe um valor válido.'
             : 'Não foi possível salvar. Tente novamente.';
         setNotice(blockerMessage);
@@ -600,11 +603,19 @@ export default function Home() {
     });
   }
 
+  function validateNames(values: { ownerName: string; dogName: string }) {
+    const names = validateRegistrationNames(values);
+    if (!names.error) return true;
+    setNotice(registrationNameMessages[names.error]);
+    window.setTimeout(() => setNotice(''), 4200);
+    return false;
+  }
+
   async function persistNewAppointment() {
-    if (savingForm) return;
+    if (savingForm || !validateNames(form)) return;
     setSavingForm('create');
     const ok = await mutate({
-      action: 'create', ...form,
+      action: 'create', ...form, ownerName: form.ownerName.trim(), dogName: form.dogName.trim(),
       amountCents: realToCents(form.amount),
       expectedRateBps: cardRateBps(form.paymentMethod, rates),
     }, 'Agendamento criado');
@@ -617,6 +628,7 @@ export default function Home() {
 
   async function createAppointment(event: FormEvent) {
     event.preventDefault();
+    if (!validateNames(form)) return;
     if (duplicateAppointments.length) {
       setDuplicateOpen(true);
       return;
@@ -684,6 +696,10 @@ export default function Home() {
 
   async function savePetNotes() {
     if (!petHistoryProfile || petNotesSaving) return;
+    if (!validateNames(petHistoryProfile)) {
+      setNotice('Complete o nome do pet e do tutor em Editar atendimento antes de salvar observações.');
+      return;
+    }
     setPetNotesSaving(true);
     const ok = await mutate({
       action: 'pet_notes',
@@ -746,6 +762,12 @@ export default function Home() {
   }
 
   async function openRenew(item: Appointment) {
+    if (!validateNames(item)) {
+      setTodayOpen(false);
+      setPlanOpen(false);
+      openEdit(item);
+      return;
+    }
     try {
       const response = await fetch('/api/appointments', {
         method: 'POST',
@@ -763,6 +785,9 @@ export default function Home() {
       if (!response.ok) {
         const message = data.error === 'plan_incomplete'
           ? `Ainda ${data.pendingCount === 1 ? 'existe 1 banho em aberto' : `existem ${data.pendingCount} banhos em aberto`}. Finalize todas as sessões antes de renovar.`
+          : data.error === 'names_required' ? `${registrationNameMessages.names_required} Corrija o cadastro em Editar atendimento.`
+          : data.error === 'owner_name_required' ? `${registrationNameMessages.owner_name_required} Corrija o cadastro em Editar atendimento.`
+          : data.error === 'pet_name_required' ? `${registrationNameMessages.pet_name_required} Corrija o cadastro em Editar atendimento.`
           : 'Não foi possível conferir a renovação. Tente novamente.';
         setNotice(message);
         window.setTimeout(() => setNotice(''), 4200);
@@ -785,7 +810,7 @@ export default function Home() {
   }
 
   async function confirmRenew() {
-    if (!renewTarget || savingForm || renewDates.some((date) => !date)) return;
+    if (!renewTarget || savingForm || renewDates.some((date) => !date) || !validateNames(renewTarget)) return;
     setSavingForm('renew');
     const ok = await mutate(
       { action: 'renew', groupId: renewTarget.groupId, sessionDates: renewDates },
@@ -929,11 +954,11 @@ export default function Home() {
   }
 
   async function persistEdit(recalculateFutureDates: boolean) {
-    if (!editing || savingForm) return;
+    if (!editing || savingForm || !validateNames(editing)) return;
     setSavingForm('edit');
     const dateChanged = editing.scheduledDate !== editingOriginalDate;
     const ok = await mutate({
-      action: 'edit', id: editing.id, ownerName: editing.ownerName, dogName: editing.dogName,
+      action: 'edit', id: editing.id, ownerName: editing.ownerName.trim(), dogName: editing.dogName.trim(),
       whatsapp: editing.whatsapp, cpf: editing.cpf, paymentMethod: editing.paymentMethod,
       scheduledDate: editing.scheduledDate, scheduledTime: editing.scheduledTime,
       services: editing.services, amountCents: editing.amountCents, recalculateFutureDates,
@@ -950,7 +975,7 @@ export default function Home() {
 
   async function saveEdit(event: FormEvent) {
     event.preventDefault();
-    if (!editing || savingForm) return;
+    if (!editing || savingForm || !validateNames(editing)) return;
     const hasFutureSessions = editing.planType !== 'single' && editing.sessionNumber < editing.totalSessions;
     if (hasFutureSessions && editing.scheduledDate !== editingOriginalDate) {
       setEditDateChoiceOpen(true);
@@ -1706,8 +1731,8 @@ export default function Home() {
               {selectedFormProfile?.notes && <p className="mt-2 rounded-lg bg-[#fff4dc] px-3 py-2 text-xs font-semibold leading-5 text-[#80591d]"><strong>Observações do pet:</strong> {selectedFormProfile.notes}</p>}
             </div>
             <div className="grid gap-3 sm:grid-cols-3">
-              <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><UserRound size={14} /> Nome do dono</span><Input value={form.ownerName} onChange={(event) => setForm({ ...form, ownerName: event.target.value })} placeholder="Ex.: Ana" className="h-11 bg-white" /></label>
-              <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><Dog size={14} /> Nome do cachorro</span><Input value={form.dogName} onChange={(event) => setForm({ ...form, dogName: event.target.value })} placeholder="Ex.: Bob" className="h-11 bg-white" /></label>
+              <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><UserRound size={14} /> Nome do tutor (obrigatório)</span><Input required pattern={'.*\\S.*'} title="Informe o nome do tutor. O campo não pode conter apenas espaços." value={form.ownerName} onChange={(event) => setForm({ ...form, ownerName: event.target.value })} placeholder="Ex.: Ana" className="h-11 bg-white" /></label>
+              <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><Dog size={14} /> Nome do pet (obrigatório)</span><Input required pattern={'.*\\S.*'} title="Informe o nome do pet. O campo não pode conter apenas espaços." value={form.dogName} onChange={(event) => setForm({ ...form, dogName: event.target.value })} placeholder="Ex.: Bob" className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><MessageCircle size={14} /> WhatsApp</span><Input type="tel" inputMode="tel" value={form.whatsapp} onChange={(event) => setForm({ ...form, whatsapp: event.target.value })} placeholder="(47) 99999-9999" className="h-11 bg-white" /></label>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
@@ -1871,8 +1896,8 @@ export default function Home() {
           <DialogHeader><DialogTitle className="font-heading text-xl font-extrabold">Editar atendimento</DialogTitle><DialogDescription>{editing?.planType === 'single' ? 'Altere os detalhes deste atendimento.' : 'Ao mudar a data, você escolhe se altera somente esta sessão ou também recalcula as próximas.'}</DialogDescription></DialogHeader>
           {editing && <form onSubmit={saveEdit} className="space-y-5">
             <div className="grid gap-3 sm:grid-cols-2">
-              <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Nome do dono</span><Input value={editing.ownerName} onChange={(event) => setEditing({ ...editing, ownerName: event.target.value })} className="h-11 bg-white" /></label>
-              <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Nome do cachorro</span><Input value={editing.dogName} onChange={(event) => setEditing({ ...editing, dogName: event.target.value })} className="h-11 bg-white" /></label>
+              <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Nome do tutor (obrigatório)</span><Input required pattern={'.*\\S.*'} title="Informe o nome do tutor. O campo não pode conter apenas espaços." value={editing.ownerName} onChange={(event) => setEditing({ ...editing, ownerName: event.target.value })} className="h-11 bg-white" /></label>
+              <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Nome do pet (obrigatório)</span><Input required pattern={'.*\\S.*'} title="Informe o nome do pet. O campo não pode conter apenas espaços." value={editing.dogName} onChange={(event) => setEditing({ ...editing, dogName: event.target.value })} className="h-11 bg-white" /></label>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <label><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><MessageCircle size={14} /> WhatsApp</span><Input type="tel" inputMode="tel" value={editing.whatsapp} onChange={(event) => setEditing({ ...editing, whatsapp: event.target.value })} placeholder="(47) 99999-9999" className="h-11 bg-white" /></label>

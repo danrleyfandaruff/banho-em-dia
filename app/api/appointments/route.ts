@@ -2,6 +2,7 @@ import { requireAuthorized, writeAudit } from '@/lib/auth';
 import { calculatePayment, cardRateBps, type PaymentBreakdown } from '@/lib/payment';
 import { getCardRates } from '@/lib/payment-rates';
 import { createSupabaseAdmin } from '@/lib/supabase';
+import { validateRegistrationNames } from '@/lib/registration-validation';
 
 type AppointmentRow = {
   id: string;
@@ -314,6 +315,12 @@ export async function POST(request: Request) {
   if (auth.response || !auth.user) return auth.response;
   const body = await request.json() as Record<string, unknown>;
   const action = String(body.action ?? 'create');
+  if (['create', 'edit', 'pet_notes'].includes(action)) {
+    const names = validateRegistrationNames(body);
+    if (names.error) return Response.json({ error: names.error }, { status: 400 });
+    body.ownerName = names.ownerName;
+    body.dogName = names.dogName;
+  }
   const admin = createSupabaseAdmin();
 
   if (action === 'pet_notes') {
@@ -622,6 +629,8 @@ export async function POST(request: Request) {
     const previousSessions = await findPlan(previousGroupId);
     const previous = previousSessions.at(-1);
     if (!previous) return Response.json({ error: 'not_found' }, { status: 404 });
+    const names = validateRegistrationNames({ ownerName: previous.owner_name, dogName: previous.dog_name });
+    if (names.error) return Response.json({ error: names.error }, { status: 400 });
     if (previous.plan_type === 'single') return Response.json({ error: 'single_cannot_renew' }, { status: 409 });
     const pendingCount = previousSessions.filter((session) => session.status === 'scheduled').length;
     if (pendingCount) return Response.json({ error: 'plan_incomplete', pendingCount }, { status: 409 });
@@ -662,9 +671,9 @@ export async function POST(request: Request) {
       group_id: groupId,
       ...(previous.client_id ? { client_id: previous.client_id } : {}),
       ...(previous.pet_id ? { pet_id: previous.pet_id } : {}),
-      customer_pet_name: previous.customer_pet_name,
-      owner_name: previous.owner_name,
-      dog_name: previous.dog_name,
+      customer_pet_name: [names.ownerName, names.dogName].join(' + '),
+      owner_name: names.ownerName,
+      dog_name: names.dogName,
       whatsapp: previous.whatsapp,
       cpf: previous.cpf,
       payment_method: '',
