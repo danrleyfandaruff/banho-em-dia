@@ -8,6 +8,7 @@ export type PaymentMethod = '' | 'pix' | 'cash' | 'debit' | 'credit';
 export type Appointment = {
   id: string;
   groupId: string;
+  renewal: { groupId: string; renewedAt: string } | null;
   clientId: string | null;
   petId: string | null;
   customerPetName: string;

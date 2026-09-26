@@ -47,6 +47,7 @@ function mapRow(row: AppointmentRow): Appointment {
   return {
     id: row.id,
     groupId: row.group_id,
+    renewal: null,
     clientId: row.client_id,
     petId: row.pet_id,
     customerPetName: row.customer_pet_name,
@@ -97,7 +98,21 @@ async function listAppointments() {
     .order('scheduled_time')
     .returns<AppointmentRow[]>();
   assertNoError(error);
-  return (data ?? []).map(mapRow);
+  const appointments = (data ?? []).map(mapRow);
+  const groupIds = [...new Set(appointments.map(item => item.groupId))];
+  const renewals = new Map<string, NonNullable<Appointment['renewal']>>();
+  // Each group has at most one renewal; bounded batches stay below the API row limit.
+  for (let offset = 0; offset < groupIds.length; offset += 200) {
+    const result = await admin.from('plan_renewals')
+      .select('original_group_id,renewal_group_id,created_at')
+      .in('original_group_id', groupIds.slice(offset, offset + 200))
+      .returns<{ original_group_id: string; renewal_group_id: string; created_at: string }[]>();
+    assertNoError(result.error);
+    for (const row of result.data ?? []) {
+      renewals.set(row.original_group_id, { groupId: row.renewal_group_id, renewedAt: row.created_at });
+    }
+  }
+  return appointments.map(item => ({ ...item, renewal: renewals.get(item.groupId) ?? null }));
 }
 
 async function findAppointment(id: string) {
@@ -468,6 +483,17 @@ export async function POST(request: Request) {
     const previousSessions = await findPlan(previousGroupId);
     const previous = previousSessions.at(-1);
     if (!previous) return Response.json({ error: 'not_found' }, { status: 404 });
+    const existingRenewal = await findPlanRenewal(previousGroupId);
+    if (existingRenewal) {
+      const renewal = {
+        alreadyRenewed: true,
+        renewalGroupId: existingRenewal.renewal_group_id,
+        renewedAt: existingRenewal.created_at,
+        dogName: appointmentName(previous),
+      };
+      return action === 'renew_info' ? Response.json(renewal)
+        : Response.json({ ...renewal, error: 'plan_already_renewed' }, { status: 409 });
+    }
     let registered;
     try { registered = await getRegisteredPet(previous.pet_id, previous.client_id); }
     catch (error) { if (error instanceof RegistryError) return Response.json({ error: error.code }, { status: error.status }); throw error; }
@@ -476,23 +502,19 @@ export async function POST(request: Request) {
     if (previous.plan_type === 'single') return Response.json({ error: 'single_cannot_renew' }, { status: 409 });
     const pendingCount = previousSessions.filter((session) => session.status === 'scheduled').length;
     if (pendingCount) return Response.json({ error: 'plan_incomplete', pendingCount }, { status: 409 });
-    const existingRenewal = await findPlanRenewal(previousGroupId);
     const totalSessions = previous.plan_type === 'monthly' ? 4 : 2;
     const intervalDays = intervalForPlan(previous.plan_type);
     const nextStart = addDays(previous.scheduled_date, intervalDays);
     const defaultDates = Array.from({ length: totalSessions }, (_, index) => addDays(nextStart, intervalDays * index));
     if (action === 'renew_info') {
       return Response.json({
-        alreadyRenewed: Boolean(existingRenewal),
-        renewalGroupId: existingRenewal?.renewal_group_id ?? null,
-        renewedAt: existingRenewal?.created_at ?? null,
+        alreadyRenewed: false,
+        renewalGroupId: null,
+        renewedAt: null,
         dogName: appointmentName(previous),
         planType: previous.plan_type,
         sessionDates: defaultDates,
       });
-    }
-    if (existingRenewal) {
-      return Response.json({ error: 'plan_already_renewed', renewalGroupId: existingRenewal.renewal_group_id }, { status: 409 });
     }
     const requestedDates = Array.isArray(body.sessionDates) ? body.sessionDates.map(String) : [];
     const sessionDates = defaultDates.map((date, index) => /^\d{4}-\d{2}-\d{2}$/.test(requestedDates[index] ?? '') ? requestedDates[index] : date);
@@ -505,7 +527,15 @@ export async function POST(request: Request) {
       created_at: createdAt,
     });
     if (reservation.error) {
-      return Response.json({ error: 'plan_already_renewed' }, { status: 409 });
+      // Only a unique-key conflict means another request already reserved this plan.
+      if (reservation.error.code !== '23505') throw reservation.error;
+      const concurrentRenewal = await findPlanRenewal(previousGroupId);
+      if (!concurrentRenewal) throw reservation.error;
+      return Response.json({
+        error: 'plan_already_renewed',
+        renewalGroupId: concurrentRenewal.renewal_group_id,
+        renewedAt: concurrentRenewal.created_at,
+      }, { status: 409 });
     }
     const renewalAmount = parsePaymentDetails(previous.payment_details)?.baseCents ?? previous.amount_cents;
     const rows = Array.from({ length: totalSessions }, (_, index) => ({

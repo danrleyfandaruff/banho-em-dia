@@ -26,6 +26,7 @@ import { PetProfileEditor, type ProfileDraft } from '@/components/pet-profile-ed
 import type { Appointment, ClientProfile, PetProfile, PlanType, Status, PaymentMethod } from '@/lib/agenda-types';
 import { AgendaWorkspace } from '@/components/agenda-workspace';
 import { PlanSessionDates } from '@/components/plan-session-dates';
+import { canRenewPlan } from '@/lib/plan-renewal';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
@@ -48,6 +49,13 @@ function Button({ onClick, children, disabled, className, ...props }: ComponentP
     }}>
     {busy && <LoaderCircle className="animate-spin" aria-label="Salvando" />}{children}
   </BaseButton>;
+}
+
+function PlanRenewalNotice({ renewal }: { renewal: NonNullable<Appointment['renewal']> }) {
+  return <p className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-[#62586d]">
+    <CheckCircle2 size={14} aria-hidden="true" />Plano renovado em{' '}
+    <time dateTime={renewal.renewedAt}>{new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo' }).format(new Date(renewal.renewedAt))}</time>
+  </p>;
 }
 
 const cardColors: Record<Status, string> = {
@@ -200,7 +208,7 @@ const emptyForm = (scheduledDate = localDateString()) => ({
   sessionCompleted: Array.from({ length: 4 }, () => false),
 });
 
-type MutationResult = { appointments?: Appointment[]; petProfiles?: PetProfile[]; clients?: ClientProfile[]; savedPetId?: string; rates?: CardRates; error?: string; blockers?: string[]; missing?: string[]; pendingCount?: number };
+type MutationResult = { renewalGroupId?: string; renewedAt?: string; appointments?: Appointment[]; petProfiles?: PetProfile[]; clients?: ClientProfile[]; savedPetId?: string; rates?: CardRates; error?: string; blockers?: string[]; missing?: string[]; pendingCount?: number };
 type ProfileEditorState = { initial: ProfileDraft; returnTo: 'plan' | 'history' | 'edit' | 'directory'; sourceAppointmentId?: string };
 
 export default function Home() {
@@ -412,10 +420,7 @@ export default function Home() {
   const pendingExtraAppointments = appointments.filter(item => item.extras?.some(extra => !extra.paid));
   const pendingGroups = Array.from(new Map(appointments.filter((item) => !item.paid).map((item) => [item.groupId, item])).values());
   const renewalItems = appointments.filter((item) =>
-    item.planType !== 'single'
-    && item.sessionNumber === item.totalSessions
-    && item.status === 'completed'
-    && (groupStats.get(item.groupId)?.scheduled ?? 0) === 0,
+    canRenewPlan(item, groupStats.get(item.groupId)?.scheduled ?? 0),
   );
   const editingPlan = editing ? appointments.filter((item) => item.groupId === editing.groupId) : [];
   const selectedPlan = selectedPlanGroupId
@@ -426,9 +431,10 @@ export default function Home() {
   const selectedPlanStats = selectedPlanHead
     ? groupStats.get(selectedPlanHead.groupId) ?? { completed: 0, absent: 0, scheduled: 0 }
     : { completed: 0, absent: 0, scheduled: 0 };
-  const selectedPlanIsRenewable = Boolean(
-    selectedPlanLast?.status === 'completed' && selectedPlanStats.scheduled === 0,
-  );
+  const selectedPlanIsRenewable = canRenewPlan(selectedPlanLast, selectedPlanStats.scheduled);
+  const selectedPlanRenewal = selectedPlanHead?.renewal;
+  const renewedPlanHead = selectedPlanRenewal
+    ? appointments.find(item => item.groupId === selectedPlanRenewal.groupId) : undefined;
   const completedToDelete = editingPlan.filter((item) => item.status === 'completed').length;
   const deleteBlockers = [
     completedToDelete
@@ -453,6 +459,13 @@ export default function Home() {
       const data = await response.json().catch(() => ({ error: 'unexpected_response' })) as MutationResult;
       if (!response.ok) {
         if (data.rates) setRates(data.rates);
+        if (data.error === 'plan_already_renewed' && typeof payload.groupId === 'string') {
+          rememberRenewal(payload.groupId, data.renewalGroupId, data.renewedAt);
+          setRenewOpen(false);
+          setRenewTarget(null);
+          setRenewDates([]);
+          setRenewedWarning({ name: renewTarget?.dogName || 'este pet', renewedAt: data.renewedAt ?? null });
+        }
         const blockerMessage = response.status === 401
           ? 'Seu acesso expirou. Atualize a página e tente salvar novamente.'
           : response.status === 403
@@ -607,7 +620,7 @@ export default function Home() {
 
   function renderCompactAppointment(item: Appointment, fromOverview = false) {
     const stats = groupStats.get(item.groupId);
-    const renewable = item.planType !== 'single' && item.sessionNumber === item.totalSessions && item.status === 'completed' && stats?.scheduled === 0;
+    const renewable = canRenewPlan(item, stats?.scheduled ?? 0);
     const notes = profileForAppointment(item)?.notes;
     const showPlan = () => fromOverview ? openPlanFromToday(item) : openPlan(item);
     const showHistory = () => { if (fromOverview) setTodayOpen(false); openPetHistory(item); };
@@ -621,6 +634,7 @@ export default function Home() {
           <span className={`appointment-status ${cardColors[item.status]}`}>{item.status === 'completed' ? <CheckCircle2 size={13} /> : item.status === 'absent' ? <X size={13} /> : <Clock3 size={13} />}{statusLabels[item.status]}</span>
           <Button variant="ghost" size="sm" onClick={() => updatePaid(item)} title={item.planType === 'single' ? 'Pagamento deste banho' : 'Pagamento único de todo o plano'} className={`h-8 px-1 text-xs ${item.paid ? 'text-[#347052]' : 'text-[#a0472e]'}`}><CircleDollarSign size={14} />{item.planType === 'single' ? (item.paid ? 'Pago' : 'Pendente') : (item.paid ? 'Plano pago' : 'Plano pendente')}</Button>
         </div>
+        {item.renewal && <PlanRenewalNotice renewal={item.renewal} />}
         {item.planType !== 'single' && <PlanSessionDates sessions={planSessions.get(item.groupId) ?? []} currentId={item.id} onOpen={showPlan} />}
         <ExtraSummary extras={item.extras ?? []} onOpen={() => openExtras(item, fromOverview ? 'today' : 'none')} />
         {notes && <p className="mt-2 line-clamp-2 text-xs text-[#80591d]" title={notes}>Obs.: {notes}</p>}
@@ -866,7 +880,18 @@ export default function Home() {
     setSelectedIds([]);
   }
 
+  function rememberRenewal(groupId: string, renewalGroupId?: string | null, renewedAt?: string | null) {
+    if (!renewalGroupId || !renewedAt) return;
+    setAppointments(current => current.map(item => item.groupId === groupId
+      ? { ...item, renewal: { groupId: renewalGroupId, renewedAt } } : item));
+  }
+
   async function openRenew(item: Appointment) {
+    const renewal = appointments.find(current => current.groupId === item.groupId)?.renewal;
+    if (renewal) {
+      setRenewedWarning({ name: item.dogName, renewedAt: renewal.renewedAt });
+      return;
+    }
     if (!item.petId) {
       setTodayOpen(false); setPlanOpen(false);
       const profile = profileForAppointment(item);
@@ -888,6 +913,7 @@ export default function Home() {
       });
       const data = await response.json() as {
         alreadyRenewed?: boolean;
+        renewalGroupId?: string | null;
         renewedAt?: string | null;
         dogName?: string;
         sessionDates?: string[];
@@ -906,6 +932,7 @@ export default function Home() {
         return;
       }
       if (data.alreadyRenewed) {
+        rememberRenewal(item.groupId, data.renewalGroupId, data.renewedAt);
         setRenewedWarning({ name: data.dogName || item.dogName || item.ownerName || 'este cliente', renewedAt: data.renewedAt ?? null });
         return;
       }
@@ -1542,6 +1569,7 @@ export default function Home() {
                 </Button>
                 <Button variant="outline" onClick={deleteFromPlan} className="h-11 w-full border-[#ead0cc] font-bold text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f] sm:h-9 sm:w-auto"><Trash2 /> Apagar plano</Button>
               </div>
+              {selectedPlanHead.renewal && <PlanRenewalNotice renewal={selectedPlanHead.renewal} />}
               <PaidTotal item={selectedPlanHead} />
             </div>
           )}
@@ -1600,6 +1628,7 @@ export default function Home() {
           </div>
           <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5">
             <Button variant="outline" onClick={closePlan}>{planReturnToToday ? 'Voltar para atendimentos de hoje' : 'Fechar'}</Button>
+            {renewedPlanHead && <Button variant="outline" onClick={() => openPlan(renewedPlanHead, planReturnToToday)}><ChevronRight />Ver novo plano</Button>}
             {selectedPlanIsRenewable && selectedPlanHead && (
               <Button
                 onClick={() => openRenew(selectedPlanHead)}

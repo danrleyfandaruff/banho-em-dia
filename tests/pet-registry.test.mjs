@@ -58,7 +58,13 @@ async function fixture() {
           if(operation!=='read' && hooks.beforeWrite){const hook=hooks.beforeWrite;hooks.beforeWrite=null;hook(table,operation);}
           let data=db[table].filter(row=>filters.every(filter=>filter(row)));
           if(operation!=='read') writes.push({table,operation,values});
-          if(operation==='insert'){data=Array.isArray(values)?values:[values]; db[table].push(...data)}
+          if(operation==='insert'){
+            data=Array.isArray(values)?values:[values];
+            if(table==='plan_renewals' && data.some(value=>db[table].some(row=>row.original_group_id===value.original_group_id || row.renewal_group_id===value.renewal_group_id))) {
+              return {data:null,error:{code:'23505',message:'duplicate renewal'}};
+            }
+            db[table].push(...data);
+          }
           if(operation==='update') data.forEach(row=>Object.assign(row,values));
           if(operation==='delete') db[table]=db[table].filter(row=>!data.includes(row));
           if(range) data=data.slice(range[0],range[1]+1);
@@ -686,4 +692,64 @@ test('a concurrent JSON update is not overwritten by an extra or an ordinary app
   assert.deepEqual(row.services.included, changed.included);
   assert.equal(row.scheduled_date, originalDate);
   assert.equal(row.amount_cents, originalAmount);
+});
+
+
+test('renewal status is returned immediately and on reload for every session of the old plan', async () => {
+  const f = await fixture();
+  await post(f, { ...plan, sessionCompleted: [true, true, true, true] });
+  const groupId = f.db.appointments[0].group_id;
+  const response = await post(f, { action: 'renew', groupId });
+  assert.equal(response.status, 200);
+  const saved = f.db.plan_renewals[0];
+  for (const data of [await response.json(), await (await f.GET(new Request('http://localhost/api/appointments'))).json()]) {
+    const oldPlan = data.appointments.filter(item => item.groupId === groupId);
+    assert.equal(oldPlan.length, 4);
+    for (const item of oldPlan) assert.deepEqual(item.renewal, { groupId: saved.renewal_group_id, renewedAt: saved.created_at });
+    const nextPlan = data.appointments.filter(item => item.groupId === saved.renewal_group_id);
+    assert.equal(nextPlan.length, 4);
+    assert.ok(nextPlan.every(item => item.renewal === null));
+  }
+  // A stale tab receives the same persisted metadata, even if an old session was reopened.
+  f.db.appointments[0].status = 'scheduled';
+  const info = await post(f, { action: 'renew_info', groupId });
+  const data = await info.json();
+  assert.equal(data.alreadyRenewed, true);
+  assert.equal(data.renewalGroupId, saved.renewal_group_id);
+  assert.equal(data.renewedAt, saved.created_at);
+  const duplicate = await post(f, { action: 'renew', groupId });
+  assert.equal(duplicate.status, 409);
+  assert.equal((await duplicate.json()).renewalGroupId, saved.renewal_group_id);
+  assert.equal(f.db.appointments.length, 8);
+  assert.equal(f.db.plan_renewals.length, 1);
+});
+
+test('concurrent renewals create only one new plan and return the existing renewal to the loser', async () => {
+  const f = await fixture();
+  await post(f, { ...plan, sessionCompleted: [true, true, true, true] });
+  const groupId = f.db.appointments[0].group_id;
+  const responses = await Promise.all([post(f, { action: 'renew', groupId }), post(f, { action: 'renew', groupId })]);
+  assert.deepEqual(responses.map(response => response.status).sort((a, b) => a - b), [200, 409]);
+  assert.equal(f.db.plan_renewals.length, 1);
+  assert.equal(f.db.appointments.length, 8);
+  const conflict = await responses.find(response => response.status === 409).json();
+  assert.equal(conflict.error, 'plan_already_renewed');
+  assert.equal(conflict.renewalGroupId, f.db.plan_renewals[0].renewal_group_id);
+  assert.equal(conflict.renewedAt, f.db.plan_renewals[0].created_at);
+});
+
+test('a completed new cycle can renew while the previous cycle stays marked as renewed', async () => {
+  const f = await fixture();
+  await post(f, { ...plan, sessionCompleted: [true, true, true, true] });
+  const originalGroup = f.db.appointments[0].group_id;
+  await post(f, { action: 'renew', groupId: originalGroup });
+  const nextGroup = f.db.plan_renewals[0].renewal_group_id;
+  f.db.appointments.filter(item => item.group_id === nextGroup).forEach(item => { item.status = 'completed'; });
+  const response = await post(f, { action: 'renew', groupId: nextGroup });
+  assert.equal(response.status, 200);
+  assert.equal(f.db.plan_renewals.length, 2);
+  assert.equal(f.db.appointments.length, 12);
+  const data = await response.json();
+  assert.equal(data.appointments.find(item => item.groupId === originalGroup).renewal.groupId, nextGroup);
+  assert.equal(data.appointments.find(item => item.groupId === nextGroup).renewal.groupId, f.db.plan_renewals[1].renewal_group_id);
 });
