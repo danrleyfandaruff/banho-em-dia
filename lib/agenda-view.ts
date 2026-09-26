@@ -47,6 +47,7 @@ export function matchesSearch(
     cpf: string;
     whatsapp: string;
     services?: string[];
+    extras?: { name: string; paid: boolean }[];
   },
   search: string,
 ) {
@@ -55,7 +56,7 @@ export function matchesSearch(
   return (
     !query ||
     normalize(
-      `${item.dogName} ${item.ownerName} ${item.cpf} ${item.whatsapp} ${(item.services ?? []).join(' ')}`,
+      `${item.dogName} ${item.ownerName} ${item.cpf} ${item.whatsapp} ${(item.services ?? []).join(' ')} ${(item.extras ?? []).map((extra) => extra.name).join(' ')}`,
     ).includes(query) ||
     Boolean(
       digits &&
@@ -75,7 +76,7 @@ export function filterAgenda(
       (item) =>
         matchesSearch(item, search) &&
         (status === 'all' || item.status === status) &&
-        (!unpaid || !item.paid),
+        (!unpaid || !item.paid || item.extras?.some((extra) => !extra.paid)),
     )
     .sort(
       (a, b) =>

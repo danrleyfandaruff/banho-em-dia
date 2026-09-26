@@ -456,7 +456,7 @@ export function FinancialDashboard({
                   change({ ...filters, plan: event.target.value })
                 }
               >
-                <option value="all">Todos os planos e avulsos</option>
+                <option value="all">Planos, avulsos e extras</option>
                 {Object.entries(PLAN_LABELS).map(([key, label]) => (
                   <option key={key} value={key}>
                     {label}
@@ -535,9 +535,9 @@ export function FinancialDashboard({
               </div>
               {report.incomplete > 0 && (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                  {report.incomplete} plano(s) pago(s) sem registro financeiro
-                  completo ficaram fora dos totais. Corrija o pagamento na
-                  agenda para incluí-los.
+                  {report.incomplete} lançamento(s) pago(s) sem registro
+                  financeiro completo ficaram fora dos totais. Corrija o
+                  pagamento na agenda para incluí-los.
                 </div>
               )}
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -559,10 +559,10 @@ export function FinancialDashboard({
                 <Stat
                   label="Ticket médio"
                   value={money(report.totals.ticket)}
-                  note="Valor bruto por plano ou avulso pago, contado uma vez."
+                  note="Valor bruto por lançamento pago: plano, avulso ou extra."
                 />
                 <Stat
-                  label="Planos e avulsos pagos"
+                  label="Lançamentos pagos"
                   value={String(report.totals.count)}
                   note={`${report.activeDays} dias com recebimentos · ${money(report.days ? Math.round(report.totals.gross / report.days) : 0)} por dia corrido`}
                 />
@@ -574,7 +574,7 @@ export function FinancialDashboard({
                 <Stat
                   label="A receber agora"
                   value={money(report.pending.gross)}
-                  note={`${report.pending.count} planos/avulsos pendentes em todas as datas${report.pending.unknown ? ` · ${report.pending.unknown} sem valor` : ''}`}
+                  note={`${report.pending.count} lançamentos pendentes em todas as datas${report.pending.unknown ? ` · ${report.pending.unknown} sem valor` : ''}`}
                 />
               </div>
               {report.totals.count === 0 && (
@@ -600,7 +600,7 @@ export function FinancialDashboard({
                       ? dateLabel(report.bestDay.date)
                       : 'Sem dados',
                     detail: report.bestDay
-                      ? `${money(report.bestDay.gross)} · ${report.bestDay.count} planos/avulsos no período`
+                      ? `${money(report.bestDay.gross)} · ${report.bestDay.count} lançamentos no período`
                       : 'Aparece após o primeiro pagamento.',
                   },
                   {
@@ -875,7 +875,7 @@ export function FinancialDashboard({
                 </Panel>
                 <Panel
                   title="O que mais gera recebimentos"
-                  subtitle="Cada plano é contado uma vez, independentemente do número de sessões."
+                  subtitle="Planos e avulsos são contados uma vez. Serviços extras entram como cobranças independentes."
                 >
                   <Distribution items={report.plans} />
                 </Panel>
@@ -908,7 +908,7 @@ export function FinancialDashboard({
                         ? `${report.activity.completed} atendimentos concluídos e ${report.activity.absent} faltas. A taxa de falta foi ${percent(report.activity.absenceRate)} entre atendimentos finalizados.`
                         : 'Nenhum atendimento agendado no período escolhido.'}{' '}
                       {report.pending.withPastSession > 0
-                        ? `${report.pending.withPastSession} planos/avulsos pendentes têm pelo menos uma sessão datada até hoje.`
+                        ? `${report.pending.withPastSession} lançamentos pendentes têm pelo menos uma sessão datada até hoje.`
                         : ''}
                     </p>
                   </div>
@@ -936,7 +936,7 @@ export function FinancialDashboard({
                               </p>
                               <p className="truncate text-xs text-[#81748a]">
                                 {customer.pets.join(', ')} · {customer.count}{' '}
-                                planos/avulsos
+                                lançamentos
                               </p>
                             </div>
                           </div>
@@ -989,9 +989,9 @@ export function FinancialDashboard({
                     </Empty>
                   )}
                   <p className="mt-4 text-xs leading-5 text-[#81748a]">
-                    Um atendimento pode ter vários serviços. Como não há preço
-                    individual por serviço, esta lista mostra quantidade, sem
-                    atribuir faturamento.
+                    Os serviços incluídos no plano não têm preço individual.
+                    Esta lista mostra quantidades; o valor dos extras aparece
+                    nos recebimentos.
                   </p>
                   {report.hours.length > 0 && (
                     <details className="mt-4 text-sm">
@@ -1019,7 +1019,7 @@ export function FinancialDashboard({
               </div>
               <Panel
                 title="Valores que ainda estão em aberto"
-                subtitle={`Visão atual de todas as datas, respeitando o tipo de plano. Sem filtro de pagamento: ainda não houve recebimento. ${money(report.pending.startedInPeriod)} pertencem a planos/avulsos que começam no período selecionado.`}
+                subtitle={`Visão atual de todas as datas, respeitando o tipo de lançamento. Sem filtro de pagamento: ainda não houve recebimento. ${money(report.pending.startedInPeriod)} pertencem a lançamentos com data inicial ou sessão no período selecionado.`}
               >
                 {report.pending.count ? (
                   <>
@@ -1028,7 +1028,7 @@ export function FinancialDashboard({
                         <thead className="text-xs text-[#81748a]">
                           <tr>
                             {[
-                              'Primeira sessão',
+                              'Data inicial / sessão',
                               'Tutor / pet',
                               'Tipo',
                               'Valor previsto',
@@ -1045,7 +1045,7 @@ export function FinancialDashboard({
                         <tbody>
                           {report.pending.items.map((item) => (
                             <tr
-                              key={item.groupId}
+                              key={item.id}
                               className="border-t border-[#f0ecf5]"
                             >
                               <td className="py-3 pr-4">
@@ -1060,6 +1060,11 @@ export function FinancialDashboard({
                               </td>
                               <td className="py-3 pr-4">
                                 {PLAN_LABELS[item.plan]}
+                                {item.plan === 'extra' && (
+                                  <span className="mt-1 block text-xs text-[#81748a]">
+                                    {item.description}
+                                  </span>
+                                )}
                               </td>
                               <td className="py-3 pr-4 tabular-nums">
                                 {item.amount === null
@@ -1080,13 +1085,13 @@ export function FinancialDashboard({
                   </>
                 ) : (
                   <Empty>
-                    Nenhum pagamento pendente para este tipo de plano.
+                    Nenhum pagamento pendente para este tipo de lançamento.
                   </Empty>
                 )}
               </Panel>
               <Panel
                 title="Recebimentos do período"
-                subtitle="Uma linha por plano ou avulso. Pagamentos conjuntos são distribuídos entre os planos, sem repetir o total."
+                subtitle="Uma linha por plano, avulso ou serviço extra. Pagamentos conjuntos são distribuídos entre os planos, sem repetir o total."
               >
                 {report.receipts.length ? (
                   <>
@@ -1115,7 +1120,7 @@ export function FinancialDashboard({
                         <tbody>
                           {report.receipts.map((item) => (
                             <tr
-                              key={item.groupId}
+                              key={item.id}
                               className="border-t border-[#f0ecf5]"
                             >
                               <td className="py-3 pr-4">
@@ -1129,6 +1134,11 @@ export function FinancialDashboard({
                               </td>
                               <td className="py-3 pr-4">
                                 {PLAN_LABELS[item.plan]}
+                                {item.plan === 'extra' && (
+                                  <span className="mt-1 block text-xs text-[#81748a]">
+                                    {item.description}
+                                  </span>
+                                )}
                               </td>
                               <td className="py-3 pr-4">
                                 {METHOD_LABELS[item.method]}
@@ -1203,10 +1213,11 @@ export function FinancialDashboard({
                   mostrado não é lucro.
                 </p>
                 <p className="mt-1">
-                  Desmarcar um pagamento corrige o registro e o retira das
-                  análises. Não representa um estorno bancário. Comparações usam
-                  o mesmo número de dias corridos; o melhor mês considera todo o
-                  histórico disponível. Atualizado em{' '}
+                  Serviços extras têm recebimento próprio e não são repetidos na
+                  renovação. Desmarcar um pagamento corrige o registro e o
+                  retira das análises. Não representa um estorno bancário.
+                  Comparações usam o mesmo número de dias corridos; o melhor mês
+                  considera todo o histórico disponível. Atualizado em{' '}
                   {new Intl.DateTimeFormat('pt-BR', {
                     dateStyle: 'short',
                     timeStyle: 'short',

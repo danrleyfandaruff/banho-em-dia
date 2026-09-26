@@ -22,6 +22,10 @@ const paymentRecord = moduleUrl(
     .replace("from './payment'", 'from ' + JSON.stringify(payment))
     .replace("from './finance-date'", 'from ' + JSON.stringify(financeDate)),
 );
+const appointmentServices = moduleUrl(
+  await compile('../lib/appointment-services.ts'),
+);
+const extraSource = await compile('../lib/extra-services.ts');
 const registrySource = await compile('../lib/pet-registry.ts');
 const routeSource = await compile('../app/api/appointments/route.ts');
 let sequence = 0;
@@ -34,6 +38,7 @@ async function fixture() {
       appointments: [], plan_renewals: [],
     };
     export const writes = [];
+    export const hooks = { beforeWrite: null };
     export const requireAuthorized = async () => ({user:{id:'staff'}});
     export const writeAudit = async () => {};
     export const getCardRates = async () => ({credit:308,debit:87});
@@ -41,7 +46,7 @@ async function fixture() {
       const filters = []; let operation='read',values,range;
       const q = {
         select(){return q}, order(){return q},
-        eq(key,value){filters.push(row=>row[key]===value);return q},
+        eq(key,value){filters.push(row=>key==='services'?JSON.stringify(row[key])===value:row[key]===value);return q},
         is(key,value){return q.eq(key,value)},
         gt(key,value){filters.push(row=>row[key]>value);return q},
         in(key,values){filters.push(row=>values.includes(row[key]));return q},
@@ -50,6 +55,7 @@ async function fixture() {
         update(data){operation='update';values=structuredClone(data);return q},
         delete(){operation='delete';return q},
         run(){
+          if(operation!=='read' && hooks.beforeWrite){const hook=hooks.beforeWrite;hooks.beforeWrite=null;hook(table,operation);}
           let data=db[table].filter(row=>filters.every(filter=>filter(row)));
           if(operation!=='read') writes.push({table,operation,values});
           if(operation==='insert'){data=Array.isArray(values)?values:[values]; db[table].push(...data)}
@@ -69,9 +75,25 @@ async function fixture() {
     source.replace(
       /from (['"])(@\/lib\/[^'"]+)\1/g,
       (_, _quote, name) =>
-        `from ${JSON.stringify(name === '@/lib/registration-validation' ? validation : name === '@/lib/payment' ? payment : name === '@/lib/pet-registry' ? registry : name === '@/lib/payment-record' ? paymentRecord : mock)}`,
+        `from ${JSON.stringify(name === '@/lib/registration-validation' ? validation : name === '@/lib/payment' ? payment : name === '@/lib/pet-registry' ? registry : name === '@/lib/payment-record' ? paymentRecord : name === '@/lib/appointment-services' ? appointmentServices : name === '@/lib/extra-services' ? extras : mock)}`,
     );
   const registry = moduleUrl(replace(registrySource));
+  const extras = moduleUrl(
+    extraSource.replace(
+      /from (['"])(\.\/[^'"]+)\1/g,
+      (_, _quote, name) =>
+        'from ' +
+        JSON.stringify(
+          name === './appointment-services'
+            ? appointmentServices
+            : name === './payment-record'
+              ? paymentRecord
+              : name === './payment'
+                ? payment
+                : mock,
+        ),
+    ),
+  );
   return {
     ...(await import(mock)),
     ...(await import(moduleUrl(replace(routeSource)))),
@@ -459,4 +481,209 @@ test('batch payments allocate one charge across plans, store a shared date, and 
   });
   assert.equal(first.amount_cents, allocated);
   assert.equal(first.payment_details.receipt.date, '2026-03-16');
+});
+
+const extraRequest = (id, overrides = {}) => ({
+  action: 'extra_create',
+  id,
+  extraId: crypto.randomUUID(),
+  revision: 0,
+  name: 'Tosa bebê',
+  amountCents: 5000,
+  paid: false,
+  paymentMethod: '',
+  paymentDate: '2026-08-21',
+  ...overrides,
+});
+
+test('an extra belongs to one session and leaves the original plan payment untouched; retries do not duplicate it', async () => {
+  const f = await fixture();
+  await post(f, plan);
+  const before = structuredClone(f.db.appointments);
+  f.writes.length = 0;
+  const body = extraRequest(f.db.appointments[2].id);
+  let response = await post(f, body);
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.equal(data.appointments[2].extras.length, 1);
+  assert.equal(data.appointments[2].extras[0].paid, false);
+  assert.equal(data.appointments[2].servicesRevision, 1);
+  assert.deepEqual(data.appointments[2].services, ['Banho']);
+  for (let i = 0; i < 4; i++) {
+    assert.deepEqual(
+      { ...f.db.appointments[i], services: before[i].services },
+      before[i],
+    );
+    if (i !== 2)
+      assert.deepEqual(f.db.appointments[i].services, before[i].services);
+  }
+  assert.equal(f.writes.length, 1);
+  assert.deepEqual(Object.keys(f.writes[0].values), ['services']);
+  response = await post(f, body);
+  assert.equal(response.status, 200);
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.db.appointments[2].services.extras.length, 1);
+});
+
+test('extra creation validates names, amounts, dates, included services and stale revisions without overwriting', async () => {
+  const f = await fixture();
+  await post(f, plan);
+  const row = f.db.appointments[0];
+  f.writes.length = 0;
+  for (const [overrides, error] of [
+    [{ name: ' ' }, 'invalid_extra'],
+    [{ amountCents: null }, 'invalid_extra'],
+    [{ amountCents: -1 }, 'invalid_extra'],
+    [{ amountCents: 1.5 }, 'invalid_extra'],
+    [{ name: ' banho ' }, 'extra_already_included'],
+    [
+      { paid: true, paymentMethod: 'pix', paymentDate: '2999-01-01' },
+      'invalid_payment_date',
+    ],
+    [
+      { paid: true, paymentMethod: 'credit', expectedRateBps: 1 },
+      'rates_changed',
+    ],
+  ]) {
+    const response = await post(f, extraRequest(row.id, overrides));
+    assert.equal((await response.json()).error, error);
+    assert.equal(f.writes.length, 0);
+  }
+  await post(f, extraRequest(row.id));
+  let response = await post(f, extraRequest(row.id, { name: 'Hidratação' }));
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).error, 'extra_conflict');
+  response = await post(
+    f,
+    extraRequest(row.id, { revision: 1, name: 'Tosa bebe' }),
+  );
+  assert.equal((await response.json()).error, 'extra_duplicate');
+  assert.equal(row.services.extras.length, 1);
+});
+
+test('extra payment, correction and removal have independent receipts and preserve the plan', async () => {
+  const f = await fixture();
+  await post(f, plan);
+  const row = f.db.appointments[0];
+  const original = structuredClone(row.payment_details);
+  const body = extraRequest(row.id);
+  await post(f, body);
+  let response = await post(f, {
+    ...body,
+    action: 'extra_edit',
+    revision: 1,
+    paid: true,
+    paymentMethod: 'credit',
+    expectedRateBps: 308,
+  });
+  assert.equal(response.status, 200);
+  let extra = row.services.extras[0];
+  assert.equal(extra.paid, true);
+  assert.equal(extra.paymentDetails.receipt.date, '2026-08-21');
+  assert.notEqual(extra.paymentDetails.receipt.id, original.receipt.id);
+  assert.equal(
+    extra.paymentDetails.totalCents,
+    Math.ceil((5000 * 10000) / 9692),
+  );
+  const receiptId = extra.paymentDetails.receipt.id;
+  response = await post(f, { ...body, action: 'extra_remove', revision: 2 });
+  assert.equal((await response.json()).error, 'extra_paid_delete_blocked');
+  response = await post(f, {
+    ...body,
+    action: 'extra_edit',
+    revision: 2,
+    paid: true,
+    paymentMethod: 'credit',
+    expectedRateBps: 308,
+    paymentDate: '2026-08-22',
+  });
+  assert.equal(response.status, 200);
+  extra = row.services.extras[0];
+  assert.equal(extra.paymentDetails.receipt.id, receiptId);
+  assert.equal(extra.paymentDetails.receipt.date, '2026-08-22');
+  await post(f, { ...body, action: 'extra_unpay', revision: 3 });
+  assert.equal(row.services.extras[0].paid, false);
+  assert.equal(row.services.extras[0].paymentDetails, null);
+  assert.deepEqual(row.payment_details, original);
+  assert.equal(row.paid, true);
+  response = await post(f, { ...body, action: 'extra_remove', revision: 4 });
+  assert.equal(response.status, 200);
+  assert.equal(row.services.extras.length, 0);
+  assert.deepEqual(row.payment_details, original);
+});
+
+test('editing services and moving a session preserves extras; renewal copies only included services', async () => {
+  const f = await fixture();
+  await post(f, { ...plan, sessionCompleted: [true, true, true, true] });
+  const row = f.db.appointments[3];
+  const body = extraRequest(row.id);
+  await post(f, body);
+  const originalExtra = structuredClone(row.services.extras[0]);
+  const response = await post(f, {
+    action: 'edit',
+    id: row.id,
+    services: ['Banho', 'Tosa higiênica'],
+    scheduledDate: '2026-10-25',
+    scheduledTime: '11:00',
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(row.services.included, ['Banho', 'Tosa higiênica']);
+  assert.deepEqual(row.services.extras[0], originalExtra);
+  assert.equal(row.scheduled_date, '2026-10-25');
+  await post(f, { action: 'renew', groupId: row.group_id });
+  const newRows = f.db.appointments.slice(4);
+  assert.equal(newRows.length, 4);
+  assert.ok(newRows.every((item) => Array.isArray(item.services)));
+  assert.deepEqual(newRows[3].services, ['Banho', 'Tosa higiênica']);
+  assert.ok(newRows.every((item) => !item.services.includes('Tosa bebê')));
+});
+
+test('paid extras block deleting an otherwise unpaid and uncompleted plan', async () => {
+  const f = await fixture();
+  await post(f, {
+    ...plan,
+    paid: false,
+    sessionCompleted: [false, false, false, false],
+  });
+  const row = f.db.appointments[0];
+  await post(f, extraRequest(row.id, { paid: true, paymentMethod: 'pix' }));
+  const response = await post(f, { action: 'delete', id: row.id });
+  assert.equal(response.status, 409);
+  assert.ok((await response.json()).blockers.includes('serviço extra pago'));
+  assert.equal(f.db.appointments.length, 4);
+});
+
+test('a concurrent JSON update is not overwritten by an extra or an ordinary appointment edit', async () => {
+  const f = await fixture();
+  await post(f, plan);
+  const row = f.db.appointments[0];
+  const changed = {
+    version: 1,
+    revision: 1,
+    included: ['Banho', 'Tosa higiênica'],
+    extras: [],
+  };
+  f.hooks.beforeWrite = () => {
+    row.services = structuredClone(changed);
+  };
+  let response = await post(f, extraRequest(row.id));
+  assert.equal(response.status, 409);
+  assert.deepEqual(row.services, changed);
+  const originalDate = row.scheduled_date;
+  const originalAmount = row.amount_cents;
+  f.hooks.beforeWrite = () => {
+    row.services.revision = 2;
+  };
+  response = await post(f, {
+    action: 'edit',
+    id: row.id,
+    services: ['Banho'],
+    scheduledDate: '2026-11-12',
+    amountCents: 77777,
+  });
+  assert.equal(response.status, 409);
+  assert.equal(row.services.revision, 2);
+  assert.deepEqual(row.services.included, changed.included);
+  assert.equal(row.scheduled_date, originalDate);
+  assert.equal(row.amount_cents, originalAmount);
 });

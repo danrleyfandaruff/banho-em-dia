@@ -128,3 +128,20 @@ test('same-name pets stay separate by ID and legacy records match their tutor', 
   assert.equal(visits.last.id, 'legacy');
   assert.equal(visits.next, undefined);
 });
+
+test('paid plans with unpaid extras remain in the pending filter and extra names are searchable', () => {
+  const item = appointment({
+    paid: true,
+    extras: [{ name: 'Tosa bebê', paid: false }],
+  });
+  assert.equal(filterAgenda([item], 'tosa bebe', 'all', true).length, 1);
+  assert.equal(
+    filterAgenda(
+      [{ ...item, extras: [{ name: 'Tosa bebê', paid: true }] }],
+      '',
+      'all',
+      true,
+    ).length,
+    0,
+  );
+});

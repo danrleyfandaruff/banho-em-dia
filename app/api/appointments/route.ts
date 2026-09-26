@@ -1,3 +1,6 @@
+import { readServices, normalizeServiceName, type StoredServices } from '@/lib/appointment-services';
+import { saveExtraService, ExtraServiceError } from '@/lib/extra-services';
+import type { Appointment } from '@/lib/agenda-types';
 import { requireAuthorized, writeAudit } from '@/lib/auth';
 import { calculatePayment, cardRateBps, type PaymentBreakdown } from '@/lib/payment';
 import { recordPayment, paymentDate, PaymentInputError } from '@/lib/payment-record';
@@ -24,34 +27,12 @@ type AppointmentRow = {
   scheduled_date: string;
   scheduled_time: string;
   status: string;
-  services: string[] | string;
+  services: StoredServices;
   session_number: number;
   total_sessions: number;
   created_at: string;
 };
 
-type Appointment = {
-  id: string;
-  groupId: string;
-  clientId: string | null;
-  petId: string | null;
-  customerPetName: string;
-  ownerName: string;
-  dogName: string;
-  whatsapp: string;
-  cpf: string;
-  paymentMethod: '' | 'pix' | 'cash' | 'debit' | 'credit';
-  paymentDetails: PaymentBreakdown | null;
-  planType: 'monthly' | 'fortnightly' | 'single';
-  amountCents: number | null;
-  paid: boolean;
-  scheduledDate: string;
-  scheduledTime: string;
-  status: 'scheduled' | 'completed' | 'absent';
-  services: string[];
-  sessionNumber: number;
-  totalSessions: number;
-};
 
 function parsePaymentDetails(value: AppointmentRow['payment_details']): PaymentBreakdown | null {
   if (!value) return null;
@@ -59,12 +40,9 @@ function parsePaymentDetails(value: AppointmentRow['payment_details']): PaymentB
   try { return JSON.parse(value) as PaymentBreakdown; } catch { return null; }
 }
 
-function parseServices(value: AppointmentRow['services']) {
-  if (Array.isArray(value)) return value.map(String);
-  try { return JSON.parse(value) as string[]; } catch { return []; }
-}
 
 function mapRow(row: AppointmentRow): Appointment {
+  const services = readServices(row.services);
   const legacyNames = row.customer_pet_name.split(/\s*\+\s*/);
   return {
     id: row.id,
@@ -84,7 +62,9 @@ function mapRow(row: AppointmentRow): Appointment {
     scheduledDate: row.scheduled_date,
     scheduledTime: row.scheduled_time,
     status: row.status as Appointment['status'],
-    services: parseServices(row.services),
+    services: services.included,
+    extras: services.extras,
+    servicesRevision: services.revision,
     sessionNumber: row.session_number,
     totalSessions: row.total_sessions,
   };
@@ -208,6 +188,18 @@ export async function POST(request: Request) {
     throw error;
   }
   const admin = createSupabaseAdmin();
+
+  if (action.startsWith('extra_')) {
+    try {
+      const result = await saveExtraService(body);
+      if (result.changed) await writeAudit(auth.user, action, 'appointment_extra', String(body.extraId),
+        `${action === 'extra_remove' ? 'Removeu' : action === 'extra_unpay' ? 'Desmarcou o pagamento de' : action === 'extra_create' ? 'Adicionou' : 'Atualizou'} o extra ${result.extra?.name ?? result.previous?.name} de ${result.row.dog_name}`,
+        { appointmentId: result.row.id, groupId: result.row.group_id, previous: result.previous ?? null, extra: result.extra ?? null });
+    } catch (error) {
+      if (error instanceof ExtraServiceError) return Response.json({ error: error.code, ...(error.code === 'rates_changed' ? { rates: await getCardRates() } : {}) }, { status: error.status });
+      throw error;
+    }
+  }
 
   if (action === 'create') {
     const planType = String(body.planType ?? 'monthly') as Appointment['planType'];
@@ -419,9 +411,11 @@ export async function POST(request: Request) {
       const ownerName = String(body.ownerName ?? '');
       const dogName = String(body.dogName ?? '');
       if (!row.pet_id) { const names = validateRegistrationNames({ ownerName, dogName }); if (names.error) return Response.json({ error: names.error }, { status: 400 }); }
+      const existingServices = readServices(row.services);
+      const nextServices = Array.isArray(body.services) ? body.services.map(String) : [];
+      if (nextServices.some(name => existingServices.extras.some(extra => normalizeServiceName(extra.name) === normalizeServiceName(name)))) return Response.json({ error: 'extra_duplicate' }, { status: 409 });
       const scheduledDate = String(body.scheduledDate ?? row.scheduled_date);
       const recalculateFutureDates = body.recalculateFutureDates !== false;
-      const futureSessionsUpdated = await reschedule(row, scheduledDate, recalculateFutureDates);
       const amountCents = body.amountCents === null || body.amountCents === undefined ? null : Number(body.amountCents);
       const services = Array.isArray(body.services) ? body.services.map(String) : [];
       // Names in legacy appointments remain editable until their registration is completed.
@@ -432,15 +426,18 @@ export async function POST(request: Request) {
       } : {};
       // Paid amounts are changed only through the payment dialog, preserving its receipt.
       const groupValues = { ...legacyIdentity, ...(!row.paid ? { payment_method: '', amount_cents: amountCents } : {}) };
+      const stored = readServices(row.services);
+      const sessionUpdate = await admin.from('appointments').update({
+        scheduled_time: String(body.scheduledTime ?? '09:00'),
+        services: Array.isArray(row.services) ? services : { ...stored, included: services, revision: stored.revision + 1 },
+      }).eq('id', id).eq('services', JSON.stringify(row.services)).select('id');
+      assertNoError(sessionUpdate.error);
+      if (!sessionUpdate.data?.length) return Response.json({ error: 'extra_conflict' }, { status: 409 });
       if (Object.keys(groupValues).length) {
         const groupUpdate = await admin.from('appointments').update(groupValues).eq('group_id', row.group_id);
         assertNoError(groupUpdate.error);
       }
-      const sessionUpdate = await admin.from('appointments').update({
-        scheduled_time: String(body.scheduledTime ?? '09:00'),
-        services,
-      }).eq('id', id);
-      assertNoError(sessionUpdate.error);
+      const futureSessionsUpdated = await reschedule(row, scheduledDate, recalculateFutureDates);
       await writeAudit(auth.user, 'appointment_edited', 'appointment', id,
         `Editou o atendimento de ${dogName || ownerName || appointmentName(row)}`,
         { previousDate: row.scheduled_date, scheduledDate, sessionNumber: row.session_number, futureSessionsUpdated, recalculateFutureDates });
@@ -453,9 +450,11 @@ export async function POST(request: Request) {
     const plan = await findPlan(target.group_id);
     const completedCount = plan.filter((session) => session.status === 'completed').length;
     const isPaid = plan.some((session) => session.paid);
+    const paidExtras = plan.some(session => readServices(session.services).extras.some(extra => extra.paid));
     const blockers: string[] = [];
     if (completedCount) blockers.push(`${completedCount} ${completedCount === 1 ? 'banho concluído' : 'banhos concluídos'}`);
     if (isPaid) blockers.push('pagamento marcado como pago');
+    if (paidExtras) blockers.push('serviço extra pago');
     if (blockers.length) return Response.json({ error: 'delete_blocked', blockers }, { status: 409 });
     const { error } = await admin.from('appointments').delete().eq('group_id', target.group_id);
     assertNoError(error);
@@ -527,7 +526,7 @@ export async function POST(request: Request) {
       scheduled_date: sessionDates[index],
       scheduled_time: previous.scheduled_time,
       status: 'scheduled',
-      services: parseServices(previousSessions[index]?.services ?? previous.services),
+      services: readServices(previousSessions[index]?.services ?? previous.services).included,
       session_number: index + 1,
       total_sessions: totalSessions,
       created_at: createdAt,

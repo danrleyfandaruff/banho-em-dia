@@ -1,3 +1,4 @@
+import type { ExtraService } from './appointment-services';
 import type { PaymentBreakdown } from './payment';
 
 export type PlanType = 'monthly' | 'fortnightly' | 'single';
@@ -23,6 +24,8 @@ export type Appointment = {
   scheduledTime: string;
   status: Status;
   services: string[];
+  extras: ExtraService[];
+  servicesRevision: number;
   sessionNumber: number;
   totalSessions: number;
 };

@@ -1,3 +1,8 @@
+import {
+  readServices,
+  serviceNames,
+  type StoredServices,
+} from './appointment-services';
 import type { PaymentBreakdown } from './payment';
 import { dateRange, dayCount, shiftDate, validDate } from './finance-date';
 
@@ -16,13 +21,14 @@ export type FinanceRow = {
   scheduled_date: string;
   scheduled_time: string;
   status: string;
-  services: string[] | string;
+  services: StoredServices;
   session_number: number;
   created_at: string;
 };
 export type Receipt = {
   id: string;
   groupId: string;
+  description: string;
   clientId: string;
   owner: string;
   pet: string;
@@ -45,6 +51,7 @@ export const PLAN_LABELS: Record<string, string> = {
   monthly: 'Mensal',
   fortnightly: 'Quinzenal',
   single: 'Avulso',
+  extra: 'Serviço extra',
 };
 export const METHOD_LABELS: Record<string, string> = {
   pix: 'Pix',
@@ -72,17 +79,6 @@ function details(
     return null;
   }
 }
-function services(value: FinanceRow['services']): string[] {
-  try {
-    const parsed: unknown =
-      typeof value === 'string' ? JSON.parse(value) : value;
-    return Array.isArray(parsed)
-      ? parsed.filter((s): s is string => typeof s === 'string')
-      : [];
-  } catch {
-    return [];
-  }
-}
 export function extractFinancialData(rows: FinanceRow[], today: string) {
   const groups = new Map<string, FinanceRow[]>();
   for (const row of rows) {
@@ -92,6 +88,8 @@ export function extractFinancialData(rows: FinanceRow[], today: string) {
   }
   const receipts: Receipt[] = [];
   const pending: {
+    id: string;
+    description: string;
     groupId: string;
     owner: string;
     pet: string;
@@ -111,6 +109,8 @@ export function extractFinancialData(rows: FinanceRow[], today: string) {
         row.scheduled_date,
       );
       pending.push({
+        id: groupId,
+        description: PLAN_LABELS[row.plan_type],
         groupId,
         owner: row.owner_name,
         pet: row.dog_name,
@@ -153,6 +153,7 @@ export function extractFinancialData(rows: FinanceRow[], today: string) {
     receipts.push({
       id: receipt.id,
       groupId,
+      description: PLAN_LABELS[row.plan_type],
       clientId: row.client_id ?? groupId,
       owner: row.owner_name,
       pet: row.dog_name,
@@ -166,9 +167,61 @@ export function extractFinancialData(rows: FinanceRow[], today: string) {
       batchId: receipt.batchId,
     });
   }
+  // Extras belong to one appointment, not to the repeated plan amount.
+  for (const row of rows) {
+    for (const extra of readServices(row.services).extras) {
+      if (!extra.paid) {
+        pending.push({
+          id: `${row.id}:${extra.id}`,
+          groupId: row.group_id,
+          description: extra.name,
+          owner: row.owner_name,
+          pet: row.dog_name,
+          plan: 'extra',
+          start: row.scheduled_date,
+          amount: extra.amountCents,
+          hasPastSession: row.scheduled_date <= today,
+        });
+        continue;
+      }
+      const payment = extra.paymentDetails;
+      const receipt = payment?.receipt;
+      if (
+        !payment ||
+        !receipt ||
+        !validDate(receipt.date) ||
+        receipt.date > today ||
+        !Object.hasOwn(METHOD_LABELS, receipt.method) ||
+        !Number.isSafeInteger(payment.totalCents) ||
+        payment.totalCents < 0 ||
+        payment.baseCents !== extra.amountCents ||
+        !Number.isInteger(payment.rateBps) ||
+        payment.rateBps < 0 ||
+        payment.rateBps >= 10000
+      ) {
+        incomplete++;
+        continue;
+      }
+      const fees = Math.round((payment.totalCents * payment.rateBps) / 10000);
+      receipts.push({
+        id: receipt.id,
+        groupId: row.group_id,
+        description: extra.name,
+        clientId: row.client_id ?? row.group_id,
+        owner: row.owner_name,
+        pet: row.dog_name,
+        plan: 'extra',
+        date: receipt.date,
+        method: receipt.method,
+        gross: payment.totalCents,
+        base: payment.baseCents,
+        fees,
+        net: payment.totalCents - fees,
+      });
+    }
+  }
   receipts.sort(
-    (a, b) =>
-      b.date.localeCompare(a.date) || a.groupId.localeCompare(b.groupId),
+    (a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id),
   );
   return { receipts, pending, incomplete };
 }
@@ -247,7 +300,10 @@ export function analyzeFinance(
     (row) =>
       row.scheduled_date >= filters.start &&
       row.scheduled_date <= filters.end &&
-      (filters.plan === 'all' || row.plan_type === filters.plan),
+      (filters.plan === 'all' ||
+        (filters.plan === 'extra'
+          ? readServices(row.services).extras.length > 0
+          : row.plan_type === filters.plan)),
   );
   const serviceCounts = new Map<string, number>();
   const hours = new Map<string, number>();
@@ -255,7 +311,11 @@ export function analyzeFinance(
     const day = byDay.get(row.scheduled_date)!;
     if (row.status === 'completed') {
       day.completed++;
-      for (const service of new Set(services(row.services)))
+      for (const service of new Set(
+        filters.plan === 'extra'
+          ? readServices(row.services).extras.map((extra) => extra.name)
+          : serviceNames(row.services),
+      ))
         serviceCounts.set(service, (serviceCounts.get(service) ?? 0) + 1);
     }
     if (row.status === 'absent') day.absent++;
@@ -439,25 +499,29 @@ export function csvReceipts(receipts: Receipt[]) {
         'Data do recebimento',
         'Tutor',
         'Pet',
-        'Plano',
+        'Tipo',
+        'Descrição',
         'Forma',
         'Valor base (R$)',
         'Recebido bruto (R$)',
         'Taxa estimada (R$)',
         'Líquido estimado (R$)',
         'Identificador do plano',
+        'Identificador do recebimento',
       ],
       ...receipts.map((item) => [
         item.date,
         item.owner,
         item.pet,
         PLAN_LABELS[item.plan],
+        item.description,
         METHOD_LABELS[item.method],
         currency(item.base),
         currency(item.gross),
         currency(item.fees),
         currency(item.net),
         item.groupId,
+        item.id,
       ]),
     ]
       .map((row) => row.map(cell).join(';'))

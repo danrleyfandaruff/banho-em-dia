@@ -12,10 +12,13 @@ const compile = async (path) =>
     },
   }).outputText;
 const datesUrl = url(await compile('../lib/finance-date.ts'));
-const source = (await compile('../lib/financial-analytics.ts')).replace(
-  "from './finance-date'",
-  'from ' + JSON.stringify(datesUrl),
-);
+const serviceModule = url(await compile('../lib/appointment-services.ts'));
+const source = (await compile('../lib/financial-analytics.ts'))
+  .replace("from './finance-date'", 'from ' + JSON.stringify(datesUrl))
+  .replace(
+    "from './appointment-services'",
+    'from ' + JSON.stringify(serviceModule),
+  );
 const { analyzeFinance, extractFinancialData, csvReceipts } = await import(
   url(source)
 );
@@ -298,4 +301,100 @@ test('analytics API rejects inverted, too long or future ranges before loading d
     assert.equal(response.status, 400);
   }
   assert.equal(f.mock.reads, 0);
+});
+
+function addExtra(
+  row,
+  {
+    id = 'extra-1',
+    name = 'Tosa bebê',
+    amount = 5000,
+    paid = true,
+    date = '2026-09-20',
+    method = 'pix',
+    rate = 0,
+  } = {},
+) {
+  const gross = Math.ceil((amount * 10000) / (10000 - rate));
+  row.services = {
+    version: 1,
+    revision: 1,
+    included: Array.isArray(row.services)
+      ? row.services
+      : row.services.included,
+    extras: [
+      ...(Array.isArray(row.services) ? [] : row.services.extras),
+      {
+        id,
+        name,
+        amountCents: amount,
+        paid,
+        paymentMethod: paid ? method : '',
+        paymentDetails: paid
+          ? {
+              baseCents: amount,
+              totalCents: gross,
+              surchargeCents: gross - amount,
+              rateBps: rate,
+              receipt: {
+                id: 'receipt-' + id,
+                date,
+                method,
+                recordedAt: date + 'T12:00:00Z',
+              },
+            }
+          : null,
+        createdAt: '2026-09-01T12:00:00Z',
+        updatedAt: '2026-09-01T12:00:00Z',
+      },
+    ],
+  };
+}
+
+test('extras count once by their payment date, independent from plan date, method and payment state', () => {
+  const input = rows({ date: '2026-08-01', start: '2026-09-20' });
+  addExtra(input[2]);
+  let report = analyzeFinance(input, filters, today);
+  assert.equal(report.totals.gross, 5000);
+  assert.equal(report.totals.count, 1);
+  assert.equal(report.receipts[0].plan, 'extra');
+  assert.equal(report.receipts[0].description, 'Tosa bebê');
+  assert.equal(report.plans.find((plan) => plan.key === 'extra').value, 5000);
+  report = analyzeFinance(input, { ...filters, plan: 'monthly' }, today);
+  assert.equal(report.totals.gross, 0);
+  report = analyzeFinance(input, { ...filters, plan: 'extra' }, today);
+  assert.equal(report.totals.gross, 5000);
+  input.forEach((row) => {
+    row.paid = false;
+    row.payment_details = null;
+  });
+  report = analyzeFinance(input, filters, today);
+  assert.equal(report.totals.gross, 5000);
+  assert.equal(report.pending.gross, 10000);
+});
+
+test('several extras on a paid plan remain separate in pending totals, CSV and service frequency', () => {
+  const input = rows({ start: '2026-09-20' });
+  input[0].status = 'completed';
+  addExtra(input[0], { paid: false });
+  addExtra(input[0], { id: 'extra-2', name: 'Hidratação', amount: 2500 });
+  const report = analyzeFinance(input, filters, today);
+  assert.equal(report.totals.gross, 12500);
+  assert.equal(report.totals.count, 2);
+  assert.equal(report.pending.gross, 5000);
+  assert.equal(report.pending.count, 1);
+  assert.equal(report.pending.items[0].description, 'Tosa bebê');
+  assert.equal(
+    report.services.find((item) => item.label === 'Tosa bebê').count,
+    1,
+  );
+  assert.equal(
+    report.services.find((item) => item.label === 'Hidratação').count,
+    1,
+  );
+  assert.ok(csvReceipts(report.receipts).includes('Hidratação'));
+  assert.equal(
+    analyzeFinance(input, { ...filters, plan: 'extra' }, today).totals.gross,
+    2500,
+  );
 });

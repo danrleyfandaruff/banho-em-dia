@@ -20,6 +20,8 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { registrationNameMessages, validateRegistrationNames } from '@/lib/registration-validation';
+import { normalizeServiceName } from '@/lib/appointment-services';
+import { ExtraSummary, SessionExtras } from '@/components/session-extras';
 import { PetProfileEditor, type ProfileDraft } from '@/components/pet-profile-editor';
 import type { Appointment, ClientProfile, PetProfile, PlanType, Status, PaymentMethod } from '@/lib/agenda-types';
 import { AgendaWorkspace } from '@/components/agenda-workspace';
@@ -206,6 +208,9 @@ export default function Home() {
   const [savedPetProfiles, setSavedPetProfiles] = useState<PetProfile[]>([]);
   const [clients, setClients] = useState<ClientProfile[]>([]);
   const [profileEditor, setProfileEditor] = useState<ProfileEditorState | null>(null);
+  const [extrasTarget, setExtrasTarget] = useState<{ id: string; returnTo: 'plan' | 'edit' | 'history' | 'today' | 'none' } | null>(null);
+  const [extrasError, setExtrasError] = useState('');
+  const extrasAppointment = appointments.find(item => item.id === extrasTarget?.id);
   const [profileError, setProfileError] = useState('');
   const planDetailsRef = useRef<HTMLFieldSetElement>(null);
   const [authStatus, setAuthStatus] = useState<'loading' | 'authorized' | 'signed_out' | 'forbidden'>('loading');
@@ -404,6 +409,7 @@ export default function Home() {
 
   const todayAppointments = appointments.filter((item) => item.scheduledDate === today);
   const dailyAppointments = appointments.filter((item) => item.scheduledDate === dailyAgendaDate);
+  const pendingExtraAppointments = appointments.filter(item => item.extras?.some(extra => !extra.paid));
   const pendingGroups = Array.from(new Map(appointments.filter((item) => !item.paid).map((item) => [item.groupId, item])).values());
   const renewalItems = appointments.filter((item) =>
     item.planType !== 'single'
@@ -429,6 +435,7 @@ export default function Home() {
       ? `${completedToDelete} ${completedToDelete === 1 ? 'banho já foi concluído' : 'banhos já foram concluídos'}`
       : '',
     editingPlan.some((item) => item.paid) ? 'o pagamento está marcado como pago' : '',
+    editingPlan.some(item => item.extras?.some(extra => extra.paid)) ? 'existe serviço extra pago' : '',
   ].filter(Boolean);
 
   function mutate(payload: Record<string, unknown>, message?: string, onSuccess?: (data: MutationResult) => void): Promise<boolean> {
@@ -472,6 +479,13 @@ export default function Home() {
             : data.error === 'pet_not_found' || data.error === 'client_not_found' ? 'Cadastro não encontrado. Atualize a lista e selecione novamente.'
             : data.error === 'pet_client_mismatch' ? 'O pet selecionado não pertence a este tutor. Selecione novamente.'
             : data.error === 'legacy_already_linked' ? 'Este atendimento já foi vinculado a uma ficha. Atualize a agenda.'
+            : data.error === 'invalid_extra' ? 'Informe o nome do serviço e um valor válido para o extra.'
+            : data.error === 'extra_duplicate' ? 'Este serviço já está nos extras da sessão. Edite o adicional existente.'
+            : data.error === 'extra_already_included' ? 'Este serviço já está incluído na sessão. Não é necessário cobrá-lo novamente como extra.'
+            : data.error === 'extra_paid_delete_blocked' ? 'Este extra está pago. Corrija o pagamento para pendente antes de remover.'
+            : data.error === 'extra_use_unpay' ? 'Use Corrigir para pendente para desmarcar este pagamento.'
+            : data.error === 'extra_conflict' ? 'Esta sessão foi alterada. Confira os dados atualizados antes de tentar novamente.'
+            : data.error === 'extra_not_found' ? 'Este extra não está mais na sessão. Atualize a lista.'
             : data.error === 'payment_amount_required' ? 'Informe o valor recebido antes de confirmar o pagamento.'
             : data.error === 'invalid_payment_date' ? 'Informe uma data de pagamento válida, até hoje.'
             : data.error === 'invalid_payment_method' ? 'Escolha a forma de pagamento.'
@@ -479,6 +493,7 @@ export default function Home() {
             : 'Não foi possível salvar. Tente novamente.';
         setNotice(blockerMessage);
         if (String(payload.action).startsWith('profile_')) setProfileError(blockerMessage);
+        if (String(payload.action).startsWith('extra_')) setExtrasError(blockerMessage);
         window.setTimeout(() => setNotice(''), 4200);
         return false;
       }
@@ -487,7 +502,7 @@ export default function Home() {
       if (data.clients) setClients(data.clients);
       if (data.petProfiles) {
         setPetHistoryProfile(current => data.petProfiles?.find(profile => profile.petId === current?.petId) ?? current);
-        setEditing(current => { const updated = data.appointments?.find(item => item.id === current?.id); return current && updated ? { ...current, clientId: updated.clientId, petId: updated.petId, ownerName: updated.ownerName, dogName: updated.dogName, whatsapp: updated.whatsapp, cpf: updated.cpf } : current; });
+        setEditing(current => { const updated = data.appointments?.find(item => item.id === current?.id); return current && updated ? { ...current, clientId: updated.clientId, petId: updated.petId, ownerName: updated.ownerName, dogName: updated.dogName, whatsapp: updated.whatsapp, cpf: updated.cpf, extras: updated.extras, servicesRevision: updated.servicesRevision } : current; });
       }
       onSuccess?.(data);
       setSelectedIds((ids) => ids.filter((id) => (data.appointments ?? []).some((item) => item.id === id && item.status === 'scheduled')));
@@ -497,6 +512,7 @@ export default function Home() {
       }
       return true;
     } catch {
+      if (String(payload.action).startsWith('extra_')) setExtrasError('Não foi possível salvar. Seus dados continuam no formulário; confira a conexão e tente novamente.');
       if (String(payload.action).startsWith('profile_')) setProfileError('Não foi possível salvar a ficha. Confira a conexão e tente novamente.');
       setNotice(navigator.onLine
         ? 'A conexão com o sistema falhou. Seus dados continuam na tela; tente salvar novamente.'
@@ -564,6 +580,31 @@ export default function Home() {
     else openProfileEditor(profile, 'plan');
   }
 
+  function openExtras(item: Appointment, returnTo: NonNullable<typeof extrasTarget>['returnTo'] = 'none') {
+    setExtrasError(''); setExtrasTarget({ id: item.id, returnTo });
+    if (returnTo === 'plan') setPlanOpen(false);
+    if (returnTo === 'edit') setEditOpen(false);
+    if (returnTo === 'history') setPetHistoryOpen(false);
+    if (returnTo === 'today') setTodayOpen(false);
+  }
+
+  function closeExtras() {
+    const returnTo = extrasTarget?.returnTo; setExtrasTarget(null);
+    if (returnTo === 'plan') setPlanOpen(true);
+    if (returnTo === 'edit') setEditOpen(true);
+    if (returnTo === 'history') setPetHistoryOpen(true);
+    if (returnTo === 'today') setTodayOpen(true);
+  }
+
+  async function saveExtra(payload: Record<string, unknown>) {
+    setExtrasError('');
+    const ok = await mutate(payload, payload.action === 'extra_remove' ? 'Extra removido' : payload.action === 'extra_unpay' ? 'Extra marcado como pendente' : 'Serviço extra salvo');
+    if (!ok) {
+      try { const response = await fetch('/api/appointments'); if (response.ok) { const data = await response.json() as MutationResult; setAppointments(data.appointments ?? []); if (data.rates) setRates(data.rates); } } catch { /* Preserve draft for retry. */ }
+    }
+    return ok;
+  }
+
   function renderCompactAppointment(item: Appointment, fromOverview = false) {
     const stats = groupStats.get(item.groupId);
     const renewable = item.planType !== 'single' && item.sessionNumber === item.totalSessions && item.status === 'completed' && stats?.scheduled === 0;
@@ -581,6 +622,7 @@ export default function Home() {
           <Button variant="ghost" size="sm" onClick={() => updatePaid(item)} title={item.planType === 'single' ? 'Pagamento deste banho' : 'Pagamento único de todo o plano'} className={`h-8 px-1 text-xs ${item.paid ? 'text-[#347052]' : 'text-[#a0472e]'}`}><CircleDollarSign size={14} />{item.planType === 'single' ? (item.paid ? 'Pago' : 'Pendente') : (item.paid ? 'Plano pago' : 'Plano pendente')}</Button>
         </div>
         {item.planType !== 'single' && <PlanSessionDates sessions={planSessions.get(item.groupId) ?? []} currentId={item.id} onOpen={showPlan} />}
+        <ExtraSummary extras={item.extras ?? []} onOpen={() => openExtras(item, fromOverview ? 'today' : 'none')} />
         {notes && <p className="mt-2 line-clamp-2 text-xs text-[#80591d]" title={notes}>Obs.: {notes}</p>}
       </div>
       <div className="flex items-center justify-end gap-2 sm:col-start-2 xl:col-start-auto xl:self-center">
@@ -589,6 +631,7 @@ export default function Home() {
           <DropdownMenuTrigger render={<BaseButton variant="outline" size="sm" />} aria-label={`Mais ações para ${item.dogName || 'atendimento'}`}><MoreHorizontal /><span>Mais ações</span></DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-56 [&_[data-slot=dropdown-menu-item]]:min-h-10 [&_[data-slot=dropdown-menu-item]]:px-3">
             <DropdownMenuItem onClick={() => fromOverview ? editFromOverview(item) : openEdit(item)}><Pencil />Editar atendimento</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => openExtras(item, fromOverview ? 'today' : 'none')}><Plus />Serviços extras</DropdownMenuItem>
             <DropdownMenuItem onClick={showHistory}><History />Ficha e histórico</DropdownMenuItem>
             {item.planType !== 'single' && <DropdownMenuItem onClick={showPlan}><ListChecks />Ver plano</DropdownMenuItem>}
             {item.whatsapp && <DropdownMenuItem onClick={() => openWhatsapp(item)}><MessageCircle />WhatsApp</DropdownMenuItem>}
@@ -1329,9 +1372,9 @@ export default function Home() {
           <div className="rounded-2xl border border-[#e4dced] bg-[#fffbff] p-5">
             <div className="mb-4 flex items-center justify-between">
               <h3 className="font-heading font-extrabold">Atenção</h3>
-              <span className="grid h-6 min-w-6 place-items-center rounded-full bg-[#f3ded7] px-1.5 text-xs font-extrabold text-[#b84f34]">{pendingGroups.length + renewalItems.length}</span>
+              <span className="grid h-6 min-w-6 place-items-center rounded-full bg-[#f3ded7] px-1.5 text-xs font-extrabold text-[#b84f34]">{pendingGroups.length + pendingExtraAppointments.length + renewalItems.length}</span>
             </div>
-            {pendingGroups.length + renewalItems.length === 0 ? (
+            {pendingGroups.length + pendingExtraAppointments.length + renewalItems.length === 0 ? (
               <p className="rounded-xl bg-[#f1ecf7] p-3 text-sm font-semibold text-[#81748a]">Tudo em dia por aqui.</p>
             ) : (
               <div className="space-y-3 text-sm">
@@ -1340,6 +1383,7 @@ export default function Home() {
                     <p className="font-bold">{item.dogName || item.ownerName || 'Sem nome'} · {item.planType === 'single' ? 'banho pendente' : 'plano pendente'}</p><p className="mt-1 text-xs text-[#7e7771]">{item.planType === 'single' ? 'Toque para marcar o banho como pago' : 'Toque para marcar todas as sessões como pagas'}</p>
                   </Button>
                 ))}
+                {pendingExtraAppointments.slice(0, 3).map(item => <Button variant="ghost" key={`extra-pending-${item.id}`} onClick={() => openExtras(item)} className="h-auto w-full justify-start whitespace-normal rounded-xl bg-[#fff4e7] p-3 text-left"><Scissors /><span>{item.dogName} · extras pendentes</span></Button>)}
                 {renewalItems.slice(0, 3).map((item) => (
                   <Button variant="ghost" key={`renew-${item.id}`} onClick={() => openRenew(item)} className="h-auto w-full flex-wrap justify-start whitespace-normal rounded-xl bg-[#f1ecf7] p-3 text-left transition hover:bg-[#e9e0f3] disabled:opacity-50">
                     <p className="font-bold">{item.dogName || item.ownerName || 'Sem nome'} · última sessão</p><p className="mt-1 text-xs font-extrabold text-[#7353a6]">Renovar plano →</p>
@@ -1453,6 +1497,7 @@ export default function Home() {
                 <div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-extrabold capitalize">{prettyDate(item.scheduledDate)} · {item.scheduledTime}</p><p className="mt-1 text-xs text-[#81748a]">{planLabels[item.planType]} · sessão {item.sessionNumber} de {item.totalSessions}</p></div><span className={`appointment-status ${cardColors[item.status]}`}>{statusLabels[item.status]}</span></div>
                 {item.planType !== 'single' && <PlanSessionDates sessions={planSessions.get(item.groupId) ?? []} currentId={item.id} onOpen={() => { setPetHistoryOpen(false); openPlan(item); }} />}
                 <p className="mt-2 text-xs text-[#6f6179]"><Scissors className="mr-1 inline" size={13} /> {item.services.length ? item.services.join(' · ') : 'Sem serviços definidos'}</p>
+                <ExtraSummary extras={item.extras ?? []} onOpen={() => openExtras(item, 'history')} />
                 <p className="mt-1 text-xs font-semibold text-[#81748a]">{item.paid ? `Pago${item.paymentMethod ? ` · ${paymentMethodLabel(item.paymentMethod)}` : ''}` : 'Pagamento pendente'}{formatMoney(item.amountCents) ? ` · ${formatMoney(item.amountCents)}` : ''}</p>
               </article>
             ))}
@@ -1514,6 +1559,7 @@ export default function Home() {
                   </div>
                   <span className={`rounded-full px-2.5 py-1 text-xs font-extrabold ${session.status === 'completed' ? 'bg-[#e8f4eb] text-[#4f765c]' : session.status === 'absent' ? 'bg-[#f7e7e2] text-[#ad533d]' : 'bg-[#f1edf5] text-[#776a80]'}`}>{statusLabels[session.status]}</span>
                 </div>
+                <ExtraSummary extras={session.extras ?? []} onOpen={() => openExtras(session, 'plan')} />
                 <div className="mt-3 grid gap-2 border-t border-[#eee8f3] pt-3 sm:grid-cols-[minmax(170px,1fr)_auto] sm:items-end">
                   <label>
                     <span className="mb-1 block text-xs font-extrabold uppercase tracking-[0.08em] text-[#8b7c95]">Alterar data</span>
@@ -1537,6 +1583,7 @@ export default function Home() {
                       <Button variant="ghost" size="icon-sm" aria-label="Mover para o próximo dia" title="Mover para o próximo dia" onClick={() => mutate({ action: 'move', id: session.id, scheduledDate: addDays(session.scheduledDate, 1) }, 'Movido para o próximo dia')} className="h-10 w-10 border border-[#ebe4f0] sm:h-8 sm:w-8 sm:border-0"><ChevronRight /></Button>
                       <span className="ml-1 text-xs font-semibold text-[#92849c] sm:hidden">Mover dia</span>
                     </div>
+                    <Button variant="outline" size="sm" onClick={() => openExtras(session, 'plan')} className="h-11 w-full sm:h-8 sm:w-auto"><Plus />Extra</Button>
                     <Button variant="outline" size="sm" onClick={() => editFromOverview(session)} className="h-11 w-full sm:h-8 sm:w-auto"><Pencil /> Editar sessão</Button>
                     {session.status === 'scheduled' ? (
                       <>
@@ -1766,6 +1813,8 @@ export default function Home() {
         </DialogContent>
       </Dialog>
 
+      {extrasTarget && extrasAppointment && <SessionExtras appointment={extrasAppointment} rates={rates} options={serviceOptions} error={extrasError} onSave={saveExtra} onClose={closeExtras} />}
+
       {profileEditor && <PetProfileEditor initial={profileEditor.initial} clients={clients} profiles={savedPetProfiles} error={profileError} onSave={saveProfile} onClose={closeProfileEditor} />}
 
       <Dialog open={newOpen} onOpenChange={setNewOpen}>
@@ -1966,13 +2015,14 @@ export default function Home() {
             </div>
             <p className="text-xs text-[#6c6374]">Cadastro antigo. Complete a ficha para vincular este atendimento ao pet.</p><Button type="button" variant="outline" onClick={() => { const profile = profileForAppointment(editing); if (profile) openProfileEditor(profile, 'edit'); }}>Completar ficha</Button>
             </>}
+            <div className="rounded-xl border border-[#e4dced] p-3"><p className="text-sm text-[#6c527f]">Para cobrar uma tosa ou outro serviço à parte, adicione um extra nesta sessão.</p><Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => openExtras(editing, 'edit')}><Plus />Serviços extras</Button><ExtraSummary extras={editing.extras ?? []} onOpen={() => openExtras(editing, 'edit')} /></div>
             {editing.paid && <p className="rounded-lg bg-[#f2edf7] p-3 text-sm text-[#7353a6]">Para corrigir o valor ou a data de recebimento, use Editar pagamento nas ações do atendimento.</p>}
             <div className="grid gap-3 sm:grid-cols-3">
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Data do banho</span><Input type="date" value={editing.scheduledDate} onChange={(event) => setEditing({ ...editing, scheduledDate: event.target.value })} className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Horário</span><Input type="time" value={editing.scheduledTime} onChange={(event) => setEditing({ ...editing, scheduledTime: event.target.value })} className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Valor (opcional)</span><Input disabled={editing.paid} inputMode="numeric" value={formatMoney(editing.amountCents) ?? ''} onChange={(event) => setEditing({ ...editing, amountCents: realToCents(event.target.value) })} placeholder="R$ 0,00" className="h-11 bg-white font-semibold tabular-nums" /></label>
             </div>
-            <div><span className="mb-2 block text-xs font-bold text-[#6f6179]">O que é para fazer</span><div className="flex flex-wrap gap-2">{serviceOptions.map((service) => <button type="button" key={service} onClick={() => toggleService(service, true)} className={`rounded-full border px-3 py-2 text-xs font-bold ${editing.services.includes(service) ? 'border-[#7353a6] bg-[#7353a6] text-white' : 'border-[#e4dced] bg-white text-[#6f6179]'}`}>{service}</button>)}</div></div>
+            <div><span className="mb-2 block text-xs font-bold text-[#6f6179]">Serviços incluídos no plano ou avulso</span><div className="flex flex-wrap gap-2">{serviceOptions.map((service) => { const isExtra = editing.extras?.some(extra => normalizeServiceName(extra.name) === normalizeServiceName(service)); return <button type="button" key={service} disabled={isExtra} onClick={() => toggleService(service, true)} className={`rounded-full border px-3 py-2 text-xs font-bold disabled:opacity-50 ${editing.services.includes(service) ? 'border-[#7353a6] bg-[#7353a6] text-white' : 'border-[#e4dced] bg-white text-[#6f6179]'}`}>{service}{isExtra ? ' · extra' : ''}</button>; })}</div></div>
             <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:justify-between sm:px-5">
               <Button type="button" variant="outline"  onClick={() => setDeleteOpen(true)} className="border-[#ead0cc] text-[#a94338] hover:bg-[#fbefed] hover:text-[#92382f]"><Trash2 /> {editing.planType === 'single' ? 'Apagar banho' : 'Apagar plano'}</Button>
               <div className="flex flex-col-reverse gap-2 sm:flex-row">
