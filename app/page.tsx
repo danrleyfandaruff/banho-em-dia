@@ -1,8 +1,10 @@
 'use client';
 
+import Link from 'next/link';
+import { businessDate, validDate } from '@/lib/finance-date';
 import { ComponentProps, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity, Calculator, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight,
+  Activity, BarChart3, Calculator, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight,
   CircleDollarSign, Clock3, CreditCard, Dog, GripVertical, History, IdCard, ListChecks, LoaderCircle, LogOut,
   MessageCircle, MoreHorizontal, PawPrint, Pencil, Plus, RefreshCw, Scissors, Search, Send, ShieldCheck,
   Sparkles, Trash2, UserPlus, Users, X,
@@ -26,7 +28,7 @@ import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuIte
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { PwaInstallButton } from '@/components/pwa-install-button';
-import { calculatePayment, cardRateBps, defaultCardRates, type CardRates } from '@/lib/payment';
+import { calculatePayment, cardRateBps, defaultCardRates, type CardRates, type PaymentBreakdown } from '@/lib/payment';
 
 // Keep feedback on the button that started the action, including queued saves.
 function Button({ onClick, children, disabled, className, ...props }: ComponentProps<typeof BaseButton>) {
@@ -139,8 +141,8 @@ function paymentPreview(amount: string, method: PaymentMethod, rates: CardRates)
   catch { return null; }
 }
 
-function PaymentSummary({ amount, method, rates, baseLabel = 'Valor do banho/plano' }: { amount: string; method: PaymentMethod; rates: CardRates; baseLabel?: string }) {
-  const details = paymentPreview(amount, method, rates);
+function PaymentSummary({ amount, method, rates, baseLabel = 'Valor do banho/plano', savedDetails }: { amount: string; method: PaymentMethod; rates: CardRates; baseLabel?: string; savedDetails?: PaymentBreakdown | null }) {
+  const details = savedDetails?.receipt?.method === method && savedDetails.baseCents === realToCents(amount) ? savedDetails : paymentPreview(amount, method, rates);
   if (!method) return null;
   return <div className="rounded-xl border border-[#d9c5eb] bg-[#f3eafa] p-4 text-sm" aria-live="polite">
     {details ? <>
@@ -189,7 +191,7 @@ function normalizeSearch(value: string) {
 const emptyForm = (scheduledDate = localDateString()) => ({
   clientId: null as string | null, petId: null as string | null,
   ownerName: '', dogName: '', whatsapp: '', cpf: '', paymentMethod: '' as PaymentMethod,
-  planType: 'monthly' as PlanType, amount: '', paid: false,
+  planType: 'monthly' as PlanType, amount: '', paid: false, paymentDate: businessDate(),
   scheduledDate, scheduledTime: '09:00',
   sessionDates: sessionDatesFor('monthly', scheduledDate),
   sessionServices: Array.from({ length: 4 }, () => ['Banho']),
@@ -239,10 +241,14 @@ export default function Home() {
   const [batchPaymentTargets, setBatchPaymentTargets] = useState<Appointment[]>([]);
   const [paymentChoice, setPaymentChoice] = useState<PaymentMethod>('');
   const [paymentAmount, setPaymentAmount] = useState('');
+  const [receivedDate, setReceivedDate] = useState(businessDate());
+
   const paymentLock = useRef(false);
   const [paymentSaving, setPaymentSaving] = useState(false);
   const [rates, setRates] = useState<CardRates>(defaultCardRates);
   const [ratesOpen, setRatesOpen] = useState(false);
+  const effectivePaymentRates = paymentTarget?.paid && paymentTarget.paymentDetails && paymentTarget.paymentMethod === paymentChoice
+    ? { ...rates, [paymentChoice]: paymentTarget.paymentDetails.rateBps } : rates;
   const [ratesDraft, setRatesDraft] = useState({ credit: '', debit: '' });
   const [ratesError, setRatesError] = useState('');
   const [ratesSaving, setRatesSaving] = useState(false);
@@ -466,6 +472,9 @@ export default function Home() {
             : data.error === 'pet_not_found' || data.error === 'client_not_found' ? 'Cadastro não encontrado. Atualize a lista e selecione novamente.'
             : data.error === 'pet_client_mismatch' ? 'O pet selecionado não pertence a este tutor. Selecione novamente.'
             : data.error === 'legacy_already_linked' ? 'Este atendimento já foi vinculado a uma ficha. Atualize a agenda.'
+            : data.error === 'payment_amount_required' ? 'Informe o valor recebido antes de confirmar o pagamento.'
+            : data.error === 'invalid_payment_date' ? 'Informe uma data de pagamento válida, até hoje.'
+            : data.error === 'invalid_payment_method' ? 'Escolha a forma de pagamento.'
             : data.error === 'invalid_amount' ? 'Informe um valor válido.'
             : 'Não foi possível salvar. Tente novamente.';
         setNotice(blockerMessage);
@@ -583,7 +592,7 @@ export default function Home() {
             <DropdownMenuItem onClick={showHistory}><History />Ficha e histórico</DropdownMenuItem>
             {item.planType !== 'single' && <DropdownMenuItem onClick={showPlan}><ListChecks />Ver plano</DropdownMenuItem>}
             {item.whatsapp && <DropdownMenuItem onClick={() => openWhatsapp(item)}><MessageCircle />WhatsApp</DropdownMenuItem>}
-            <DropdownMenuItem onClick={() => editPaymentMethod(item)}><CreditCard />Forma de pagamento</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => editPaymentMethod(item)}><CreditCard />Editar pagamento</DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, -1) }, 'Movido para o dia anterior')}><ChevronLeft />Mover para o dia anterior</DropdownMenuItem>
             <DropdownMenuItem onClick={() => mutate({ action: 'move', id: item.id, scheduledDate: addDays(item.scheduledDate, 1) }, 'Movido para o próximo dia')}><ChevronRight />Mover para o próximo dia</DropdownMenuItem>
@@ -671,7 +680,7 @@ export default function Home() {
     if (!form.petId) { setNotice('Selecione um pet cadastrado antes de criar o plano.'); return; }
     setSavingForm('create');
     const ok = await mutate({
-      action: 'create', clientId: form.clientId, petId: form.petId, planType: form.planType, scheduledDate: form.scheduledDate, scheduledTime: form.scheduledTime, sessionDates: form.sessionDates, sessionServices: form.sessionServices, sessionCompleted: form.sessionCompleted, paid: form.paid, paymentMethod: form.paymentMethod,
+      action: 'create', clientId: form.clientId, petId: form.petId, planType: form.planType, scheduledDate: form.scheduledDate, scheduledTime: form.scheduledTime, sessionDates: form.sessionDates, sessionServices: form.sessionServices, sessionCompleted: form.sessionCompleted, paid: form.paid, paymentMethod: form.paymentMethod, paymentDate: form.paymentDate,
       amountCents: realToCents(form.amount),
       expectedRateBps: cardRateBps(form.paymentMethod, rates),
     }, 'Agendamento criado');
@@ -893,7 +902,7 @@ export default function Home() {
     }
     setBatchPaymentTargets([]);
     setPaymentTarget(item);
-    setPaymentChoice('');
+    setPaymentChoice(''); setReceivedDate(businessDate());
     const registeredAmount = item.amountCents
       ?? appointments.find((appointment) => appointment.groupId === item.groupId && appointment.amountCents !== null)?.amountCents
       ?? null;
@@ -911,7 +920,7 @@ export default function Home() {
     }
     setBatchPaymentTargets(plans);
     setPaymentTarget(plans[0] ?? null);
-    setPaymentChoice('');
+    setPaymentChoice(''); setReceivedDate(businessDate());
     setPaymentAmount(formatMoney(plans.reduce((sum, item) => sum + Number(item.amountCents), 0)) ?? '');
     setPaymentOpen(true);
   }
@@ -919,14 +928,14 @@ export default function Home() {
   function editPaymentMethod(item: Appointment) {
     setBatchPaymentTargets([]);
     setPaymentTarget(item);
-    setPaymentChoice(item.paymentMethod);
+    setPaymentChoice(item.paymentMethod); setReceivedDate(item.paymentDetails?.receipt?.date ?? businessDate());
     setPaymentAmount(formatMoney(item.paymentDetails?.baseCents ?? item.amountCents) ?? '');
     setPaymentOpen(true);
   }
 
   async function confirmPayment(paymentMethod: Exclude<PaymentMethod, ''>) {
     if (!paymentTarget || paymentLock.current) return;
-    if (['credit', 'debit'].includes(paymentMethod) && !paymentPreview(paymentAmount, paymentMethod, rates)) return;
+    if (!paymentPreview(paymentAmount, paymentMethod, effectivePaymentRates) || !validDate(receivedDate) || receivedDate > businessDate()) return;
     paymentLock.current = true;
     setPaymentSaving(true);
     const isBatchPayment = batchPaymentTargets.length >= 2;
@@ -936,16 +945,16 @@ export default function Home() {
         ? {
           action: 'paid_multiple',
           ids: batchPaymentTargets.map((item) => item.id),
-          paymentMethod,
+          paymentMethod, paymentDate: receivedDate,
           expectedRateBps: cardRateBps(paymentMethod, rates),
         }
         : wasPaid
-        ? { action: 'payment_method', id: paymentTarget.id, paymentMethod, amountCents: realToCents(paymentAmount), expectedRateBps: cardRateBps(paymentMethod, rates) }
-        : { action: 'paid', id: paymentTarget.id, paid: true, paymentMethod, amountCents: realToCents(paymentAmount), expectedRateBps: cardRateBps(paymentMethod, rates) },
+        ? { action: 'payment_method', id: paymentTarget.id, paymentMethod, paymentDate: receivedDate, amountCents: realToCents(paymentAmount), expectedRateBps: cardRateBps(paymentMethod, rates) }
+        : { action: 'paid', id: paymentTarget.id, paid: true, paymentMethod, paymentDate: receivedDate, amountCents: realToCents(paymentAmount), expectedRateBps: cardRateBps(paymentMethod, rates) },
       isBatchPayment
         ? `Pagamento de ${batchPaymentTargets.length} planos confirmado`
         : wasPaid
-        ? 'Forma de pagamento atualizada'
+        ? 'Pagamento atualizado'
         : paymentTarget.planType === 'single' ? 'Pagamento do banho confirmado' : 'Pagamento do plano confirmado',
     );
     paymentLock.current = false;
@@ -1275,6 +1284,7 @@ export default function Home() {
             <Button variant="ghost" onClick={openCalculator} title="Calcular valor sem agendamento" className="px-2 text-[#7353a6]"><Calculator /> Calcular</Button>
             {currentUser?.role === 'admin' && (
               <>
+                <Link href="/analises" className="inline-flex h-10 items-center gap-2 rounded-lg px-2 text-sm font-semibold text-[#7353a6] hover:bg-[#f2edf7]"><BarChart3 size={18} />Análises</Link>
                 <Button variant="ghost" onClick={openRates} title="Alterar taxas da Stone" className="px-2 text-[#7353a6]"><CreditCard /> Taxas</Button>
                 <Button variant="ghost" size="icon-sm" onClick={openLogs} aria-label="Abrir histórico" title="Histórico" className="text-[#685872] sm:h-9 sm:w-9"><History /></Button>
                 <Button variant="ghost" size="icon-sm" onClick={openTeam} aria-label="Gerenciar equipe" title="Equipe" className="text-[#685872] sm:h-9 sm:w-9"><Users /></Button>
@@ -1468,7 +1478,7 @@ export default function Home() {
                   <span className="rounded-full bg-[#eee6f7] px-2.5 py-1 text-xs font-extrabold text-[#7353a6]">Plano {planLabels[selectedPlanHead.planType]}</span>
                   <span className={`rounded-full px-2.5 py-1 text-xs font-extrabold ${selectedPlanHead.paid ? 'bg-[#e8f4eb] text-[#4f765c]' : 'bg-[#f7e7e2] text-[#ad533d]'}`}>{selectedPlanHead.paid ? 'Plano pago' : 'Plano pendente'}</span>
                   {formatMoney(selectedPlanHead.amountCents) && <span className="text-xs font-bold text-[#6f6179]">{formatMoney(selectedPlanHead.amountCents)}</span>}
-                  {selectedPlanHead.paymentMethod && <button type="button" onClick={() => editPaymentMethod(selectedPlanHead)} title="Alterar forma de pagamento" className="inline-flex items-center gap-1 text-xs font-bold text-[#7353a6] hover:underline disabled:opacity-50"><CreditCard size={13} /> {paymentMethodLabel(selectedPlanHead.paymentMethod)}</button>}
+                  {selectedPlanHead.paymentMethod && <button type="button" onClick={() => editPaymentMethod(selectedPlanHead)} title="Editar pagamento" className="inline-flex items-center gap-1 text-xs font-bold text-[#7353a6] hover:underline disabled:opacity-50"><CreditCard size={13} /> {paymentMethodLabel(selectedPlanHead.paymentMethod)}</button>}
                 </div>
                 <div className="flex items-center gap-2 text-xs font-bold text-[#81748a]">
                   <span>{selectedPlanStats.completed} concluídos</span><span>·</span><span>{selectedPlanStats.absent} faltas</span><span>·</span><span>{selectedPlanStats.scheduled} abertos</span>
@@ -1689,7 +1699,7 @@ export default function Home() {
       }}>
         <DialogContent className="mobile-sheet border-0 bg-[#fffbff] p-4 sm:max-w-md sm:p-5">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><CircleDollarSign className="text-[#7353a6]" /> {batchPaymentTargets.length >= 2 ? 'Receber planos juntos' : paymentTarget?.paid ? 'Alterar forma de pagamento' : 'Confirmar pagamento'}</DialogTitle>
+            <DialogTitle className="flex items-center gap-2 font-heading text-xl font-extrabold"><CircleDollarSign className="text-[#7353a6]" /> {batchPaymentTargets.length >= 2 ? 'Receber planos juntos' : paymentTarget?.paid ? 'Editar pagamento' : 'Confirmar pagamento'}</DialogTitle>
             <DialogDescription>
               {batchPaymentTargets.length >= 2
                 ? `${batchPaymentTargets.length} planos selecionados. Escolha a forma de pagamento para calcular o valor total.`
@@ -1708,21 +1718,22 @@ export default function Home() {
                 aria-pressed={paymentChoice === method}
                 className={`h-auto min-h-12 flex-wrap justify-start whitespace-normal font-bold ${paymentChoice === method ? 'border-[#7353a6] bg-[#eee6f7] text-[#7353a6]' : 'border-[#dfd5e8] bg-white'}`}
               >
-                <CreditCard /> {paymentMethodLabels[method]}{['credit', 'debit'].includes(method) && <span className="text-xs">{(cardRateBps(method, rates) / 100).toLocaleString('pt-BR')}%{method === 'credit' ? ' · à vista' : ''}</span>}
+                <CreditCard /> {paymentMethodLabels[method]}{['credit', 'debit'].includes(method) && <span className="text-xs">{((paymentTarget?.paid && paymentTarget.paymentDetails && paymentTarget.paymentMethod === method ? paymentTarget.paymentDetails.rateBps : cardRateBps(method, rates)) / 100).toLocaleString('pt-BR')}%{method === 'credit' ? ' · à vista' : ''}</span>}
               </Button>
             ))}
           </div>
           <label className="block text-sm font-semibold">{batchPaymentTargets.length >= 2 ? 'Valor somado dos planos, sem taxa' : 'Valor cadastrado do banho/plano, sem taxa'}
             <Input disabled={paymentSaving} readOnly={batchPaymentTargets.length >= 2} inputMode="numeric" value={paymentAmount} onChange={(event) => setPaymentAmount(maskReal(event.target.value))} placeholder="R$ 0,00" className="mt-2 h-11 bg-white read-only:bg-[#f3eef7]" />
           </label>
-          <PaymentSummary amount={paymentAmount} method={paymentChoice} rates={rates} baseLabel={batchPaymentTargets.length >= 2 ? 'Total dos planos' : 'Valor do banho/plano'} />
+          <label htmlFor="received-date" className="block text-sm font-semibold">Data do pagamento<Input id="received-date" type="date" value={receivedDate} max={businessDate()} disabled={paymentSaving} onChange={event => setReceivedDate(event.target.value)} className="mt-2 h-11 bg-white" /></label>
+          <PaymentSummary amount={paymentAmount} method={paymentChoice} rates={effectivePaymentRates} savedDetails={paymentTarget?.paid ? paymentTarget.paymentDetails : null} baseLabel={batchPaymentTargets.length >= 2 ? 'Total dos planos' : 'Valor do banho/plano'} />
           <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5">
             <Button type="button" variant="outline" disabled={paymentSaving} onClick={() => {
               setPaymentOpen(false);
               setPaymentTarget(null);
               setBatchPaymentTargets([]);
             }}>Cancelar</Button>
-            <Button type="button" disabled={!paymentChoice || (['credit', 'debit'].includes(paymentChoice) && !paymentPreview(paymentAmount, paymentChoice, rates))} onClick={() => paymentChoice ? confirmPayment(paymentChoice) : undefined}><Check /> {batchPaymentTargets.length >= 2 ? `Confirmar ${batchPaymentTargets.length} planos` : 'Confirmar recebimento'}</Button>
+            <Button type="button" disabled={!paymentChoice || !paymentPreview(paymentAmount, paymentChoice, effectivePaymentRates) || !validDate(receivedDate) || receivedDate > businessDate()} onClick={() => paymentChoice ? confirmPayment(paymentChoice) : undefined}><Check /> {batchPaymentTargets.length >= 2 ? `Confirmar ${batchPaymentTargets.length} planos` : 'Confirmar recebimento'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1901,20 +1912,21 @@ export default function Home() {
             </fieldset>
             <fieldset disabled={!form.petId} className="min-w-0 space-y-4 rounded-2xl border border-[#e4dced] p-4 disabled:opacity-50">
               <legend className="px-1 text-base font-extrabold">3. Pagamento</legend>
-              <label htmlFor="plan-amount" className="block"><span className="mb-1.5 block text-sm font-semibold">{form.planType === 'single' ? 'Valor do atendimento' : 'Valor total do plano'} (opcional)</span><Input id="plan-amount" inputMode="numeric" value={form.amount} onChange={event => setForm({ ...form, amount: maskReal(event.target.value) })} placeholder="R$ 0,00" className="h-11 bg-white" /></label>
+              <label htmlFor="plan-amount" className="block"><span className="mb-1.5 block text-sm font-semibold">{form.planType === 'single' ? 'Valor do atendimento' : 'Valor total do plano'} {form.paid ? '(obrigatório)' : '(opcional)'}</span><Input id="plan-amount" required={form.paid} inputMode="numeric" value={form.amount} onChange={event => setForm({ ...form, amount: maskReal(event.target.value) })} placeholder="R$ 0,00" className="h-11 bg-white" /></label>
             <div className="rounded-xl border border-[#e4dced] bg-white p-3.5">
               <label className="flex cursor-pointer items-center justify-between"><span><strong className="block text-sm">{form.planType === 'single' ? 'O banho já está pago?' : 'O plano já está pago?'}</strong><small className="text-xs text-[#85768f]">{form.planType === 'single' ? 'Você pode mudar isso depois' : `Pagamento único para todas as ${totalSessionsFor(form.planType)} sessões`}</small></span><Switch checked={form.paid} onCheckedChange={(checked) => setForm({ ...form, paid: checked, paymentMethod: checked ? form.paymentMethod : '' })} /></label>
               {form.paid && (
                 <label className="mt-3 block border-t border-[#eee8f3] pt-3"><span className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[#6f6179]"><CreditCard size={14} /> Como foi pago?</span><select required value={form.paymentMethod} onChange={(event) => setForm({ ...form, paymentMethod: event.target.value as PaymentMethod })} className="h-11 w-full rounded-md border border-input bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#7353a6]/30"><option value="">Escolha a forma de pagamento</option><option value="pix">Pix</option><option value="cash">Dinheiro</option><option value="debit">Cartão de débito</option><option value="credit">Cartão de crédito</option></select></label>
               )}
             </div>
+            {form.paid && <label htmlFor="new-payment-date" className="block text-sm font-semibold">Data do pagamento<Input id="new-payment-date" required type="date" max={businessDate()} value={form.paymentDate} onChange={event => setForm({ ...form, paymentDate: event.target.value })} className="mt-2 h-11 bg-white" /></label>}
             {form.paid && <PaymentSummary amount={form.amount} method={form.paymentMethod} rates={rates} />}
             </fieldset>
             {form.petId && <section className="rounded-xl bg-[#f2edf7] p-4 text-sm" aria-label="Resumo do agendamento"><p className="font-bold">{form.dogName} · {form.ownerName}</p><p className="mt-1">{planLabels[form.planType]} · {totalSessionsFor(form.planType)} {totalSessionsFor(form.planType) === 1 ? 'sessão' : 'sessões'} · {form.scheduledTime}</p><p className="mt-2 flex flex-wrap gap-3 tabular-nums">{form.sessionDates.map((date, index) => <span key={index}>{form.sessionCompleted[index] ? '✓ ' : ''}{date ? date.split('-').reverse().join('/') : 'Defina a data'}</span>)}</p><p className="mt-2 font-semibold">{(form.paid ? formatMoney(paymentPreview(form.amount, form.paymentMethod, rates)?.totalCents ?? null) : form.amount) || 'Valor não informado'} · {form.paid ? `Pago${form.paymentMethod ? ` via ${paymentMethodLabel(form.paymentMethod)}` : ''}` : 'Pagamento pendente'}</p></section>}
 
             <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:px-5">
               <Button type="button" variant="outline" onClick={() => setNewOpen(false)}>Cancelar</Button>
-              <Button type="submit" disabled={!form.petId || Boolean(savingForm) || (form.paid && ['credit', 'debit'].includes(form.paymentMethod) && !paymentPreview(form.amount, form.paymentMethod, rates))} className="bg-[#9b6bc2] font-bold text-white hover:bg-[#8254a8]">{savingForm === 'create' ? <LoaderCircle className="animate-spin" /> : <Sparkles />} {savingForm === 'create' ? 'Salvando...' : 'Criar agendamento'}</Button>
+              <Button type="submit" disabled={!form.petId || Boolean(savingForm) || (form.paid && (!form.paymentMethod || !paymentPreview(form.amount, form.paymentMethod, rates) || !validDate(form.paymentDate) || form.paymentDate > businessDate()))} className="bg-[#9b6bc2] font-bold text-white hover:bg-[#8254a8]">{savingForm === 'create' ? <LoaderCircle className="animate-spin" /> : <Sparkles />} {savingForm === 'create' ? 'Salvando...' : 'Criar agendamento'}</Button>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -1954,10 +1966,11 @@ export default function Home() {
             </div>
             <p className="text-xs text-[#6c6374]">Cadastro antigo. Complete a ficha para vincular este atendimento ao pet.</p><Button type="button" variant="outline" onClick={() => { const profile = profileForAppointment(editing); if (profile) openProfileEditor(profile, 'edit'); }}>Completar ficha</Button>
             </>}
+            {editing.paid && <p className="rounded-lg bg-[#f2edf7] p-3 text-sm text-[#7353a6]">Para corrigir o valor ou a data de recebimento, use Editar pagamento nas ações do atendimento.</p>}
             <div className="grid gap-3 sm:grid-cols-3">
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Data do banho</span><Input type="date" value={editing.scheduledDate} onChange={(event) => setEditing({ ...editing, scheduledDate: event.target.value })} className="h-11 bg-white" /></label>
               <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Horário</span><Input type="time" value={editing.scheduledTime} onChange={(event) => setEditing({ ...editing, scheduledTime: event.target.value })} className="h-11 bg-white" /></label>
-              <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Valor (opcional)</span><Input inputMode="numeric" value={formatMoney(editing.amountCents) ?? ''} onChange={(event) => setEditing({ ...editing, amountCents: realToCents(event.target.value) })} placeholder="R$ 0,00" className="h-11 bg-white font-semibold tabular-nums" /></label>
+              <label><span className="mb-1.5 block text-xs font-bold text-[#6f6179]">Valor (opcional)</span><Input disabled={editing.paid} inputMode="numeric" value={formatMoney(editing.amountCents) ?? ''} onChange={(event) => setEditing({ ...editing, amountCents: realToCents(event.target.value) })} placeholder="R$ 0,00" className="h-11 bg-white font-semibold tabular-nums" /></label>
             </div>
             <div><span className="mb-2 block text-xs font-bold text-[#6f6179]">O que é para fazer</span><div className="flex flex-wrap gap-2">{serviceOptions.map((service) => <button type="button" key={service} onClick={() => toggleService(service, true)} className={`rounded-full border px-3 py-2 text-xs font-bold ${editing.services.includes(service) ? 'border-[#7353a6] bg-[#7353a6] text-white' : 'border-[#e4dced] bg-white text-[#6f6179]'}`}>{service}</button>)}</div></div>
             <DialogFooter className="-mx-4 -mb-4 px-4 sm:-mx-5 sm:-mb-5 sm:justify-between sm:px-5">

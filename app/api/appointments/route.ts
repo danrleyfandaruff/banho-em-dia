@@ -1,5 +1,6 @@
 import { requireAuthorized, writeAudit } from '@/lib/auth';
 import { calculatePayment, cardRateBps, type PaymentBreakdown } from '@/lib/payment';
+import { recordPayment, paymentDate, PaymentInputError } from '@/lib/payment-record';
 import { getCardRates } from '@/lib/payment-rates';
 import { createSupabaseAdmin } from '@/lib/supabase';
 import { currentAppointmentProfiles, getRegisteredPet, listRegistry, RegistryError, savePetRegistration } from '@/lib/pet-registry';
@@ -241,8 +242,8 @@ export async function POST(request: Request) {
       return Response.json({ error: 'card_amount_required' }, { status: 400 });
     }
     let paymentDetails: PaymentBreakdown | null;
-    try { paymentDetails = body.paid ? calculatePayment(amountCents, paymentMethod, rates) : null; }
-    catch { return Response.json({ error: 'invalid_amount' }, { status: 400 }); }
+    try { paymentDetails = body.paid ? recordPayment({ amount: amountCents, method: paymentMethod, rates, date: body.paymentDate }) : null; }
+    catch (error) { return Response.json({ error: error instanceof PaymentInputError ? error.message : 'invalid_amount' }, { status: 400 }); }
     const storedAmountCents = paymentDetails?.totalCents ?? amountCents;
     const contact = { clientId: body.clientId as string, petId: body.petId as string };
     const rows = Array.from({ length: totalSessions }, (_, index) => ({
@@ -313,8 +314,10 @@ export async function POST(request: Request) {
       const paid = action === 'payment_method' ? Boolean(row.paid) : Boolean(body.paid);
       const paymentMethod = paid ? String(body.paymentMethod ?? row.payment_method ?? '') : '';
       const previousPaymentDetails = parsePaymentDetails(row.payment_details);
-      const rates = await getCardRates();
-      if (paid && ['credit', 'debit'].includes(paymentMethod)
+      const currentRates = await getCardRates();
+      const rates = row.paid && previousPaymentDetails && paymentMethod === row.payment_method
+        ? { ...currentRates, [paymentMethod]: previousPaymentDetails.rateBps } : currentRates;
+      if (paid && !(row.paid && previousPaymentDetails && paymentMethod === row.payment_method) && ['credit', 'debit'].includes(paymentMethod)
         && body.expectedRateBps !== undefined
         && body.expectedRateBps !== cardRateBps(paymentMethod, rates)) {
         return Response.json({ error: 'rates_changed', rates }, { status: 409 });
@@ -331,8 +334,8 @@ export async function POST(request: Request) {
         return Response.json({ error: 'card_amount_required' }, { status: 400 });
       }
       let paymentDetails: PaymentBreakdown | null;
-      try { paymentDetails = paid ? calculatePayment(baseCents, paymentMethod, rates) : null; }
-      catch { return Response.json({ error: 'invalid_amount' }, { status: 400 }); }
+      try { paymentDetails = paid ? recordPayment({ amount: baseCents, method: paymentMethod, rates, date: body.paymentDate, previous: row.paid ? previousPaymentDetails : null }) : null; }
+      catch (error) { return Response.json({ error: error instanceof PaymentInputError ? error.message : 'invalid_amount' }, { status: 400 }); }
       const storedAmountCents = paid
         ? paymentDetails?.totalCents ?? baseCents
         : previousPaymentDetails?.baseCents ?? row.amount_cents;
@@ -345,7 +348,7 @@ export async function POST(request: Request) {
       assertNoError(error);
       await writeAudit(auth.user, 'payment_updated', 'appointment_group', row.group_id,
         `${paid ? 'Confirmou' : 'Desmarcou'} o pagamento ${row.plan_type === 'single' ? 'do banho avulso' : 'do plano'} de ${appointmentName(row)}`,
-        { paid, paymentMethod, baseCents, amountCents: storedAmountCents, paymentDetails, appliesToEntirePlan: row.plan_type !== 'single' });
+        { paid, paymentMethod, baseCents, amountCents: storedAmountCents, paymentDetails, previousPaymentDetails, appliesToEntirePlan: row.plan_type !== 'single' });
     }
   }
 
@@ -376,6 +379,11 @@ export async function POST(request: Request) {
     try { combinedPayment = calculatePayment(baseTotalCents, paymentMethod, rates); }
     catch { return Response.json({ error: 'invalid_amount' }, { status: 400 }); }
     if (!combinedPayment) return Response.json({ error: 'invalid_amount' }, { status: 400 });
+    let paidOn: string;
+    try { paidOn = paymentDate(body.paymentDate); }
+    catch { return Response.json({ error: 'invalid_payment_date' }, { status: 400 }); }
+    const batchId = crypto.randomUUID();
+    const recordedAt = new Date().toISOString();
     let allocated = 0;
     await Promise.all(plans.map(async (row, index) => {
       const baseCents = Number(row.amount_cents);
@@ -383,13 +391,13 @@ export async function POST(request: Request) {
         ? combinedPayment.totalCents - allocated
         : baseTotalCents === 0 ? 0 : Math.floor(combinedPayment.totalCents * baseCents / baseTotalCents);
       allocated += totalCents;
-      const details: PaymentBreakdown = { baseCents, rateBps: combinedPayment.rateBps, surchargeCents: totalCents - baseCents, totalCents };
+      const details: PaymentBreakdown = { baseCents, rateBps: combinedPayment.rateBps, surchargeCents: totalCents - baseCents, totalCents, receipt: { id: crypto.randomUUID(), date: paidOn, recordedAt, method: paymentMethod as 'pix' | 'cash' | 'debit' | 'credit', batchId } };
       const result = await admin.from('appointments').update({ paid: true, payment_method: paymentMethod, payment_details: details, amount_cents: totalCents }).eq('group_id', row.group_id);
       assertNoError(result.error);
     }));
-    await writeAudit(auth.user, 'payments_updated', 'appointment_groups', crypto.randomUUID(),
+    await writeAudit(auth.user, 'payments_updated', 'appointment_groups', batchId,
       `Confirmou o pagamento conjunto de ${plans.length} planos`,
-      { groupIds: plans.map((row) => row.group_id), customers: plans.map(appointmentName), paymentMethod, paymentDetails: combinedPayment });
+      { groupIds: plans.map((row) => row.group_id), customers: plans.map(appointmentName), paymentMethod, paymentDetails: combinedPayment, paymentDate: paidOn });
   }
 
   if (action === 'move') {
@@ -422,10 +430,12 @@ export async function POST(request: Request) {
         customer_pet_name: [ownerName, dogName].filter(Boolean).join(' + '), owner_name: ownerName, dog_name: dogName,
         whatsapp: String(body.whatsapp ?? ''), cpf: String(body.cpf ?? ''),
       } : {};
-      const groupUpdate = await admin.from('appointments').update({ ...legacyIdentity,
-        payment_method: String(body.paymentMethod ?? ''), amount_cents: amountCents,
-      }).eq('group_id', row.group_id);
-      assertNoError(groupUpdate.error);
+      // Paid amounts are changed only through the payment dialog, preserving its receipt.
+      const groupValues = { ...legacyIdentity, ...(!row.paid ? { payment_method: '', amount_cents: amountCents } : {}) };
+      if (Object.keys(groupValues).length) {
+        const groupUpdate = await admin.from('appointments').update(groupValues).eq('group_id', row.group_id);
+        assertNoError(groupUpdate.error);
+      }
       const sessionUpdate = await admin.from('appointments').update({
         scheduled_time: String(body.scheduledTime ?? '09:00'),
         services,

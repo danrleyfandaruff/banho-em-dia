@@ -3,6 +3,7 @@ export type PaymentBreakdown = {
   rateBps: number;
   surchargeCents: number;
   totalCents: number;
+  receipt?: { id: string; date: string; recordedAt: string; method: 'pix' | 'cash' | 'debit' | 'credit'; batchId?: string };
 };
 
 export type CardRates = { credit: number; debit: number };

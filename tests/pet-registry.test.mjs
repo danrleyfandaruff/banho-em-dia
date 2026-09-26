@@ -16,6 +16,12 @@ const validation = moduleUrl(
   await compile('../lib/registration-validation.ts'),
 );
 const payment = moduleUrl(await compile('../lib/payment.ts'));
+const financeDate = moduleUrl(await compile('../lib/finance-date.ts'));
+const paymentRecord = moduleUrl(
+  (await compile('../lib/payment-record.ts'))
+    .replace("from './payment'", 'from ' + JSON.stringify(payment))
+    .replace("from './finance-date'", 'from ' + JSON.stringify(financeDate)),
+);
 const registrySource = await compile('../lib/pet-registry.ts');
 const routeSource = await compile('../app/api/appointments/route.ts');
 let sequence = 0;
@@ -63,7 +69,7 @@ async function fixture() {
     source.replace(
       /from (['"])(@\/lib\/[^'"]+)\1/g,
       (_, _quote, name) =>
-        `from ${JSON.stringify(name === '@/lib/registration-validation' ? validation : name === '@/lib/payment' ? payment : name === '@/lib/pet-registry' ? registry : mock)}`,
+        `from ${JSON.stringify(name === '@/lib/registration-validation' ? validation : name === '@/lib/payment' ? payment : name === '@/lib/pet-registry' ? registry : name === '@/lib/payment-record' ? paymentRecord : mock)}`,
     );
   const registry = moduleUrl(replace(registrySource));
   return {
@@ -358,4 +364,99 @@ test('legacy plans require registration before renewal and reject unnamed edits'
   });
   assert.equal((await response.json()).error, 'owner_name_required');
   assert.equal(f.writes.length, 0);
+});
+
+test('paid plans require a value and record payment date once across every session', async () => {
+  const f = await fixture();
+  let response = await post(f, {
+    ...plan,
+    amountCents: null,
+    paymentMethod: 'pix',
+  });
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).error, 'payment_amount_required');
+  assert.equal(f.writes.length, 0);
+  response = await post(f, { ...plan, paymentDate: '2026-02-30' });
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).error, 'invalid_payment_date');
+  assert.equal(f.writes.length, 0);
+  response = await post(f, { ...plan, paymentDate: '2026-02-28' });
+  assert.equal(response.status, 200);
+  assert.equal(
+    new Set(f.db.appointments.map((row) => row.payment_details.receipt.id))
+      .size,
+    1,
+  );
+  assert.equal(f.db.appointments[0].payment_details.receipt.date, '2026-02-28');
+  assert.equal(f.db.appointments[0].scheduled_date, '2026-10-01');
+});
+
+test('rescheduling or editing an appointment preserves its paid amount and receipt; payment correction preserves the date and rate', async () => {
+  const f = await fixture();
+  await post(f, { ...plan, paymentDate: '2026-01-10' });
+  const row = f.db.appointments[0];
+  const before = structuredClone(row.payment_details);
+  await post(f, {
+    action: 'edit',
+    id: row.id,
+    amountCents: 99999,
+    paymentMethod: 'cash',
+    scheduledDate: '2026-11-01',
+  });
+  assert.deepEqual(row.payment_details, before);
+  assert.equal(row.amount_cents, before.totalCents);
+  assert.equal(row.payment_method, 'credit');
+  // Simulate a historical rate different from current settings.
+  for (const row of f.db.appointments) row.payment_details.rateBps = 250;
+  const response = await post(f, {
+    action: 'payment_method',
+    id: row.id,
+    paymentMethod: 'credit',
+    amountCents: 13000,
+    expectedRateBps: 308,
+  });
+  assert.equal(response.status, 200);
+  assert.equal(row.payment_details.rateBps, 250);
+  assert.equal(row.payment_details.receipt.date, '2026-01-10');
+  assert.equal(row.payment_details.receipt.id, before.receipt.id);
+  await post(f, { action: 'paid', id: row.id, paid: false });
+  assert.equal(row.paid, false);
+  assert.equal(row.payment_details, null);
+  assert.equal(row.amount_cents, 13000);
+});
+
+test('batch payments allocate one charge across plans, store a shared date, and preserve allocated cents on date-only correction', async () => {
+  const f = await fixture();
+  await post(f, { ...plan, paid: false, amountCents: 10001 });
+  await post(f, { ...plan, paid: false, amountCents: 20002 });
+  const first = f.db.appointments[0];
+  const second = f.db.appointments[4];
+  const response = await post(f, {
+    action: 'paid_multiple',
+    ids: [first.id, second.id],
+    paymentMethod: 'credit',
+    paymentDate: '2026-03-15',
+  });
+  assert.equal(response.status, 200);
+  const total = Math.ceil((30003 * 10000) / (10000 - 308));
+  assert.equal(first.amount_cents + second.amount_cents, total);
+  assert.equal(
+    first.payment_details.receipt.batchId,
+    second.payment_details.receipt.batchId,
+  );
+  assert.notEqual(
+    first.payment_details.receipt.id,
+    second.payment_details.receipt.id,
+  );
+  assert.equal(first.payment_details.receipt.date, '2026-03-15');
+  const allocated = first.amount_cents;
+  await post(f, {
+    action: 'payment_method',
+    id: first.id,
+    paymentMethod: 'credit',
+    amountCents: 10001,
+    paymentDate: '2026-03-16',
+  });
+  assert.equal(first.amount_cents, allocated);
+  assert.equal(first.payment_details.receipt.date, '2026-03-16');
 });
